@@ -423,7 +423,6 @@ export async function POST(request) {
       }
     }
 
-    const now = new Date();
 
     /*
      * V6: a Procurement-created consolidation is still a NEW
