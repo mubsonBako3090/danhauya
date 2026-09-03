@@ -326,7 +326,7 @@ export async function GET(request) {
     const pgDept = "Postgraduate Studies";
     const pgRequester = orgIndex[`requester:${pgCollege.id}:${pgFacultyId}:${pgDept}`];
     const pgHod = orgIndex[`hod:${pgCollege.id}:${pgFacultyId}:${pgDept}`];
-      
+
     // 1) DRAFT
     {
       const r = newRequisition({
@@ -366,9 +366,8 @@ export async function GET(request) {
       r.submittedAt = now;
       requisitionDocs.push(r);
       addAudit({ actor: csRequester, action: "requisition.submit", entityId: r._id, details: { toStepIndex: 0 } });
-    }
-
-    // 3) PENDING — HOD approved, awaiting Dean
+      }
+        // 3) PENDING — HOD approved, awaiting Dean
     {
       const r = newRequisition({
         requester: humRequester,
@@ -717,6 +716,119 @@ export async function GET(request) {
     }
 
     // =====================================================================
+    // BULK "AWAITING APPROVAL" REQUISITIONS
+    // One requisition per HOD (awaiting the next authority up — Dean in
+    // standard colleges, Provost where Dean is skipped), one per Dean
+    // (awaiting Provost), and one per Provost (awaiting Procurement
+    // review) — mirrors the creator-specific role sequences that
+    // lib/routing.js's buildApprovalChain() actually produces, including
+    // the rule that a creator never approves their own requisition.
+    // =====================================================================
+    function chainForCreator(creatorRole, college, facultyId, department) {
+      const routingType = college.routingType || "standard";
+      let roleSeq;
+      if (creatorRole === ROLES.HOD) {
+        roleSeq =
+          routingType === "standard"
+            ? [ROLES.DEAN, ROLES.PROVOST, ROLES.PROCUREMENT, ROLES.VC]
+            : [ROLES.PROVOST, ROLES.PROCUREMENT, ROLES.VC];
+      } else if (creatorRole === ROLES.DEAN) {
+        roleSeq = [ROLES.PROVOST, ROLES.PROCUREMENT, ROLES.VC];
+      } else {
+        // ROLES.PROVOST
+        roleSeq = [ROLES.PROCUREMENT, ROLES.VC];
+      }
+
+      const chain = roleSeq.map((role) => {
+        let approver;
+        if (role === ROLES.DEAN) approver = orgIndex[`dean:${college.id}:${facultyId}`];
+        else if (role === ROLES.PROVOST) approver = orgIndex[`provost:${college.id}`];
+        else if (role === ROLES.PROCUREMENT) approver = procDirector;
+        else if (role === ROLES.VC) approver = vc;
+        return { role, approver: approver._id, type: role === ROLES.PROCUREMENT ? "procurement_review" : "approval" };
+      });
+
+      chain.push({ role: ROLES.PROCUREMENT, approver: procDirector._id, type: "processing" });
+      return chain;
+    }
+
+    let hodInitiatedCount = 0;
+    let deanInitiatedCount = 0;
+    let provostInitiatedCount = 0;
+
+    // One per HOD — awaiting Dean (standard colleges) or Provost (postgrad/basicStudies)
+    for (const college of COLLEGES) {
+      for (const faculty of college.faculties) {
+        for (const department of faculty.departments) {
+          const hod = orgIndex[`hod:${college.id}:${faculty.id}:${department}`];
+          const r = newRequisition({
+            requester: hod,
+            college,
+            facultyId: faculty.id,
+            department,
+            category: "Office Supplies & Stationery",
+            purpose: `Departmental supplies request — ${department}`,
+            urgency: "normal",
+            items: [{ name: "Assorted office supplies", quantity: 1, unitCost: 150000 }],
+          });
+          r.approvalChain = chainForCreator(ROLES.HOD, college, faculty.id, department);
+          r.status = REQUISITION_STATUS.PENDING;
+          r.currentStepIndex = 0;
+          r.submittedAt = now;
+          requisitionDocs.push(r);
+          addAudit({ actor: hod, action: "requisition.submit", entityId: r._id, details: { toStepIndex: 0 } });
+          hodInitiatedCount++;
+        }
+      }
+    }
+
+    // One per Dean — awaiting Provost
+    for (const college of COLLEGES) {
+      for (const faculty of college.faculties) {
+        const dean = orgIndex[`dean:${college.id}:${faculty.id}`];
+        const r = newRequisition({
+          requester: dean,
+          college,
+          facultyId: faculty.id,
+          department: NA,
+          category: "Office Supplies & Stationery",
+          purpose: `Faculty-wide supplies request — ${faculty.name}`,
+          urgency: "normal",
+          items: [{ name: "Assorted office supplies", quantity: 1, unitCost: 300000 }],
+        });
+        r.approvalChain = chainForCreator(ROLES.DEAN, college, faculty.id, NA);
+        r.status = REQUISITION_STATUS.PENDING;
+        r.currentStepIndex = 0;
+        r.submittedAt = now;
+        requisitionDocs.push(r);
+        addAudit({ actor: dean, action: "requisition.submit", entityId: r._id, details: { toStepIndex: 0 } });
+        deanInitiatedCount++;
+      }
+    }
+
+    // One per Provost — awaiting Procurement review
+    for (const college of COLLEGES) {
+      const provost = orgIndex[`provost:${college.id}`];
+      const r = newRequisition({
+        requester: provost,
+        college,
+        facultyId: NA,
+        department: NA,
+        category: "Office Supplies & Stationery",
+        purpose: `College-wide supplies request — ${college.name}`,
+        urgency: "normal",
+        items: [{ name: "Assorted office supplies", quantity: 1, unitCost: 500000 }],
+      });
+      r.approvalChain = chainForCreator(ROLES.PROVOST, college, NA, NA);
+      r.status = REQUISITION_STATUS.PENDING;
+      r.currentStepIndex = 0;
+      r.submittedAt = now;
+      requisitionDocs.push(r);
+      addAudit({ actor: provost, action: "requisition.submit", entityId: r._id, details: { toStepIndex: 0 } });
+      provostInitiatedCount++;
+    }
+
+    // =====================================================================
     // INSERT (raw driver — bypasses Mongoose validation so the exact
     // shapes above are stored as-is, matching your schemas field-for-field)
     // =====================================================================
@@ -733,6 +845,9 @@ export async function GET(request) {
         requisitions: requisitionDocs.length,
         approvals: approvalDocs.length,
         auditLogs: auditLogDocs.length,
+        hodInitiatedAwaitingNextApprover: hodInitiatedCount,
+        deanInitiatedAwaitingProvost: deanInitiatedCount,
+        provostInitiatedAwaitingProcurement: provostInitiatedCount,
       },
       loginPassword: SEED_PASSWORD,
       sampleLogins: {
@@ -746,4 +861,4 @@ export async function GET(request) {
   } catch (err) {
     return NextResponse.json({ message: "Seed failed.", error: err.message }, { status: 500 });
   }
-}
+      }
