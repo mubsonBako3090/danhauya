@@ -65,22 +65,31 @@ export async function POST(
     /*
      * Validate the completed requisition.
      */
-    const {
-      error,
-    } =
-      submitRequisitionSchema.validate({
-        category:
-          existing.category,
+    const validationItems =
+  (existing.items || []).map((item) => ({
+    ...item,
+    sourceRequisitionId:
+      item.sourceRequisitionId
+        ? String(item.sourceRequisitionId)
+        : item.sourceRequisitionId,
+  }));
 
-        purpose:
-          existing.purpose,
+const {
+  error,
+} =
+  submitRequisitionSchema.validate({
+    category:
+      existing.category,
 
-        urgency:
-          existing.urgency,
+    purpose:
+      existing.purpose,
 
-        items:
-          existing.items,
-      });
+    urgency:
+      existing.urgency,
+
+    items:
+      validationItems,
+  });
 
     if (error) {
       return NextResponse.json(
