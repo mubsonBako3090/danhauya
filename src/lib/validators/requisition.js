@@ -18,6 +18,9 @@ const urgencyValues =
 
 const requestingUnitSchema =
   Joi.object({
+    _id: Joi.string()
+      .allow(null, ""),
+
     collegeId: Joi.string()
       .required(),
 
