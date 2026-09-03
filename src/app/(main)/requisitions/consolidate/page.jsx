@@ -259,8 +259,8 @@ export default function ConsolidateRequisitionPage() {
          * it immediately.
          */
         toast.success("Consolidated draft created — review it before sending.");
-        router.push(`/requisitions/consolidate/${created._id}/review`);
-        return;
+        router.push(`/requisitions/${created._id}/edit`);
+  return;
       }
 
       // VC/Procurement/Admin: already finalized, ready for processing.
