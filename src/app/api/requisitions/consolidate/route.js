@@ -450,7 +450,6 @@ export async function POST(request) {
       postApprovalConsolidationChain = routed.chain;
     }
 
-    const now = new Date();
 
     const outcomeFields = auth.role === ROLES.PROCUREMENT
       ? {
