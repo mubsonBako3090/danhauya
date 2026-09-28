@@ -267,6 +267,23 @@ const RequisitionSchema = new mongoose.Schema(
     },
 
     /*
+     * Original initiators represented by a consolidated requisition.
+     */
+    originalInitiators: [
+      {
+        user: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          required: true,
+        },
+        role: {
+          type: String,
+          required: true,
+        },
+      },
+    ],
+
+    /*
  * --------------------------------------------------
  * CONSOLIDATED REQUISITION
  * --------------------------------------------------
