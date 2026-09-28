@@ -276,6 +276,7 @@ export async function approveStep({
       representative: requisition,
       approvedStep: step,
       approverId: approverUser.id,
+      rejectionRole: step.role,
       comment,
     });
 
@@ -408,6 +409,59 @@ export async function approveStep({
  * source requisition so source tracking never remains stuck at the
  * old approver.
  */
+async function syncConsolidatedSourcesAfterRejection({
+  representative,
+  approverId,
+  rejectionRole,
+  comment,
+}) {
+  if (!representative?.isConsolidated || !Array.isArray(representative.sourceRequisitions)) return;
+
+  const queue = representative.sourceRequisitions.map(String);
+  const visited = new Set();
+
+  while (queue.length) {
+    const id = queue.shift();
+    if (!id || visited.has(id)) continue;
+    visited.add(id);
+
+    const source = await Requisition.findById(id);
+    if (!source) continue;
+
+    source.status = REQUISITION_STATUS.REJECTED;
+    source.decidedAt = new Date();
+    source.awaitingRequesterAction = false;
+    source.procurementStatus = undefined;
+    source.procurementOfficer = undefined;
+    source.procurementReceivedAt = undefined;
+    source.procurementStartedAt = undefined;
+    source.procurementCompletedAt = undefined;
+    if (comment) source.comments.push({ author: approverId, message: comment });
+    await source.save();
+
+    await Approval.create({
+      requisition: source._id,
+      stepIndex: source.currentStepIndex,
+      role: rejectionRole,
+      approver: approverId,
+      action: APPROVAL_ACTIONS.REJECT,
+      comment: comment || `Rejected through consolidated requisition ${representative.requisitionNumber || representative._id}.`,
+    });
+
+    await AuditLog.create({
+      actor: approverId,
+      action: "requisition.consolidated_source_rejected",
+      entityType: "Requisition",
+      entityId: source._id,
+      details: { representativeRequisition: representative._id, rejectionRole: ROLES.VC },
+    });
+
+    if (source.isConsolidated && Array.isArray(source.sourceRequisitions)) {
+      queue.push(...source.sourceRequisitions.map(String));
+    }
+  }
+}
+
 async function syncConsolidatedSourcesAfterApproval({
   representative,
   approvedStep,
@@ -1235,6 +1289,15 @@ export async function rejectStep({
     requisition,
     comment
   );
+
+  if (isFinal && requisition.isConsolidated) {
+    await syncConsolidatedSourcesAfterRejection({
+      representative: requisition,
+      approverId: approverUser.id,
+      rejectionRole: step.role,
+      comment,
+    });
+  }
 
   return requisition;
     }
