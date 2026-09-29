@@ -267,23 +267,6 @@ const RequisitionSchema = new mongoose.Schema(
     },
 
     /*
-     * Original initiators represented by a consolidated requisition.
-     */
-    originalInitiators: [
-      {
-        user: {
-          type: mongoose.Schema.Types.ObjectId,
-          ref: "User",
-          required: true,
-        },
-        role: {
-          type: String,
-          required: true,
-        },
-      },
-    ],
-
-    /*
  * --------------------------------------------------
  * CONSOLIDATED REQUISITION
  * --------------------------------------------------
@@ -305,6 +288,32 @@ consolidatedBy: {
   type: mongoose.Schema.Types.ObjectId,
   ref: "User",
 },
+
+consolidatedByRole: {
+  type: String,
+},
+
+/*
+ * Leaf/original initiators represented by this consolidated
+ * requisition. This is a traceability snapshot and is kept
+ * separate from `requester`, which remains the user who created
+ * the representative record for backwards compatibility.
+ */
+originalInitiators: [
+  {
+    requester: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+    role: {
+      type: String,
+    },
+    requisition: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Requisition",
+    },
+  },
+],
 
 consolidatedInto: {
   type: mongoose.Schema.Types.ObjectId,
