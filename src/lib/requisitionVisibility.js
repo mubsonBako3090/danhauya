@@ -18,6 +18,47 @@ function same(value, expected) {
   return String(left ?? "") === String(right ?? "");
 }
 
+function requisitionUnits(requisition) {
+  if (requisition?.isConsolidated && Array.isArray(requisition.requestingUnits)) {
+    return requisition.requestingUnits;
+  }
+
+  return [
+    {
+      collegeId: requisition?.collegeId,
+      facultyId: requisition?.facultyId,
+      department: requisition?.department,
+    },
+  ];
+}
+
+function isWithinOrganizationScope(auth, requisition) {
+  const units = requisitionUnits(requisition);
+
+  if (auth.role === ROLES.HOD) {
+    return units.some(
+      (unit) =>
+        same(unit.collegeId, auth.collegeId) &&
+        same(unit.facultyId, auth.facultyId) &&
+        same(unit.department, auth.department)
+    );
+  }
+
+  if (auth.role === ROLES.DEAN) {
+    return units.some(
+      (unit) =>
+        same(unit.collegeId, auth.collegeId) &&
+        same(unit.facultyId, auth.facultyId)
+    );
+  }
+
+  if (auth.role === ROLES.PROVOST) {
+    return units.some((unit) => same(unit.collegeId, auth.collegeId));
+  }
+
+  return false;
+}
+
 /**
  * Returns the database visibility scope for the authenticated user.
  * This is intentionally separate from approval routing: visibility is
@@ -43,6 +84,15 @@ export function getRequisitionVisibilityQuery(auth) {
             facultyId: auth.facultyId,
             department: auth.department,
           },
+          {
+            requestingUnits: {
+              $elemMatch: {
+                collegeId: auth.collegeId,
+                facultyId: auth.facultyId,
+                department: auth.department,
+              },
+            },
+          },
         ],
       };
 
@@ -54,6 +104,14 @@ export function getRequisitionVisibilityQuery(auth) {
             collegeId: auth.collegeId,
             facultyId: auth.facultyId,
           },
+          {
+            requestingUnits: {
+              $elemMatch: {
+                collegeId: auth.collegeId,
+                facultyId: auth.facultyId,
+              },
+            },
+          },
         ],
       };
 
@@ -62,6 +120,13 @@ export function getRequisitionVisibilityQuery(auth) {
         $or: [
           { requester: auth.sub },
           { collegeId: auth.collegeId },
+          {
+            requestingUnits: {
+              $elemMatch: {
+                collegeId: auth.collegeId,
+              },
+            },
+          },
         ],
       };
 
@@ -155,23 +220,12 @@ export function canViewRequisition(auth, requisition) {
 
   if (auth.role === ROLES.REQUESTER) return false;
 
-  if (auth.role === ROLES.HOD) {
-    return (
-      same(requisition.collegeId, auth.collegeId) &&
-      same(requisition.facultyId, auth.facultyId) &&
-      same(requisition.department, auth.department)
-    );
-  }
-
-  if (auth.role === ROLES.DEAN) {
-    return (
-      same(requisition.collegeId, auth.collegeId) &&
-      same(requisition.facultyId, auth.facultyId)
-    );
-  }
-
-  if (auth.role === ROLES.PROVOST) {
-    return same(requisition.collegeId, auth.collegeId);
+  if (
+    auth.role === ROLES.HOD ||
+    auth.role === ROLES.DEAN ||
+    auth.role === ROLES.PROVOST
+  ) {
+    return isWithinOrganizationScope(auth, requisition);
   }
 
   if (auth.role === ROLES.PROCUREMENT) {
