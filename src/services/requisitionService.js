@@ -644,17 +644,52 @@ export async function submitRequisition({
   requisitionId,
   requesterUser,
 }) {
+  /*
+   * Consolidated representatives may be submitted by the user who created
+   * the consolidation, even though `requester` is preserved as the original
+   * initiator for traceability. Load by ID first, then apply the same
+   * authorization rules used when saving the draft.
+   */
   const requisition =
-    await Requisition.findOne({
-      _id: requisitionId,
-
-      requester:
-        requesterUser.id,
-    });
+    await Requisition.findById(
+      requisitionId
+    );
 
   if (!requisition) {
     throw new Error(
       "Requisition not found."
+    );
+  }
+
+  const isRequester =
+    String(requisition.requester) ===
+    String(requesterUser.id);
+
+  const isConsolidator =
+    requisition.isConsolidated &&
+    requisition.consolidatedBy &&
+    String(requisition.consolidatedBy) ===
+    String(requesterUser.id);
+
+  const isOriginalInitiator =
+    requisition.isConsolidated &&
+    Array.isArray(
+      requisition.originalInitiators
+    ) &&
+    requisition.originalInitiators.some(
+      (initiator) =>
+        initiator?.user &&
+        String(initiator.user) ===
+          String(requesterUser.id)
+    );
+
+  if (
+    !isRequester &&
+    !isConsolidator &&
+    !isOriginalInitiator
+  ) {
+    throw new Error(
+      "You are not authorized to submit this requisition."
     );
   }
 
