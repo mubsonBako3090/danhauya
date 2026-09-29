@@ -57,14 +57,6 @@ export async function GET(
         "fullName email role department"
       )
       .populate(
-        "consolidatedBy",
-        "fullName email role procurementPosition"
-      )
-      .populate(
-        "originalInitiators.user",
-        "fullName email role department"
-      )
-      .populate(
         "comments.author",
         "fullName role"
       )
@@ -83,13 +75,26 @@ export async function GET(
       .populate(
         "procurementAssignedBy",
         "fullName email role procurementPosition"
-      ).populate(
+      )
+      .populate(
+        "consolidatedBy",
+        "fullName role email"
+      )
+      .populate(
         "consolidatedInto",
         "requisitionNumber status currentStepIndex approvalChain procurementStatus"
       )
       .populate(
+        "originalInitiators.requester",
+        "fullName role email"
+      )
+      .populate(
+        "originalInitiators.requisition",
+        "requisitionNumber"
+      )
+      .populate(
         "sourceRequisitions",
-        "requisitionNumber category status collegeId facultyId department estimatedCost requester",
+        "requisitionNumber category status collegeId facultyId department estimatedCost requester isConsolidated requestingUnits sourceRequisitions",
         null,
         {
           populate: {
