@@ -409,12 +409,25 @@ export async function saveDraft({
    */
 
   if (requisitionId) {
+    /*
+     * Consolidated drafts are created from source requisitions, so their
+     * `requester` is the original initiator (or the first original
+     * initiator), not necessarily the user who performed the consolidation.
+     * The consolidator must therefore be allowed to resume/save the
+     * representative draft through `consolidatedBy` as well.
+     *
+     * Normal drafts keep the original requester-only rule.
+     */
     requisition =
       await Requisition.findOne({
         _id: requisitionId,
-
-        requester:
-          requesterUser.id,
+        $or: [
+          { requester: requesterUser.id },
+          {
+            isConsolidated: true,
+            consolidatedBy: requesterUser.id,
+          },
+        ],
       });
 
     if (!requisition) {
@@ -469,24 +482,52 @@ export async function saveDraft({
       requesterUser.role ===
         ROLES.PROVOST
     ) {
-      requisition.collegeId =
-        data.collegeId;
+      if (requisition.isConsolidated) {
+        /*
+         * A representative requisition owns the organization snapshot
+         * inherited from its source requisitions. Editing it must not turn
+         * the consolidator into the requester or replace the source units
+         * with the consolidator's own organization.
+         */
+        requisition.collegeId =
+          requisition.collegeId;
 
-      requisition.facultyId =
-        data.facultyId;
+        requisition.facultyId =
+          requisition.facultyId;
 
-      requisition.department =
-        data.department;
+        requisition.department =
+          requisition.department;
 
-      requisition.isConsolidated =
-        data.isConsolidated;
+        requisition.isConsolidated =
+          true;
 
-      requisition.requestingUnits =
-        data.requestingUnits;
+        requisition.requestingUnits =
+          requisition.requestingUnits || [];
+      } else {
+        requisition.collegeId =
+          data.collegeId;
+
+        requisition.facultyId =
+          data.facultyId;
+
+        requisition.department =
+          data.department;
+
+        requisition.isConsolidated =
+          data.isConsolidated;
+
+        requisition.requestingUnits =
+          data.requestingUnits;
+      }
     }
 
+    /*
+     * Preserve the original requester/role on consolidated records.
+     * `consolidatedBy` identifies who performed the consolidation.
+     */
     if (
-      !requisition.requesterRole
+      !requisition.requesterRole &&
+      !requisition.isConsolidated
     ) {
       requisition.requesterRole =
         requesterUser.role;
