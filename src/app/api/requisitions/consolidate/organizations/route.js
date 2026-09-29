@@ -15,6 +15,42 @@ function getAuth() {
   return token ? verifyToken(token) : null;
 }
 
+function getRequisitionUnits(requisition) {
+  if (requisition?.isConsolidated && Array.isArray(requisition.requestingUnits)) {
+    return requisition.requestingUnits;
+  }
+
+  return [
+    {
+      collegeId: requisition?.collegeId,
+      facultyId: requisition?.facultyId,
+      department: requisition?.department,
+    },
+  ];
+}
+
+function isWithinScope(requisition, auth) {
+  if ([ROLES.VC, ROLES.PROCUREMENT, ROLES.ADMIN].includes(auth.role)) return true;
+
+  const units = getRequisitionUnits(requisition);
+
+  if (auth.role === ROLES.DEAN) {
+    return units.every(
+      (unit) =>
+        String(unit.collegeId) === String(auth.collegeId) &&
+        String(unit.facultyId) === String(auth.facultyId)
+    );
+  }
+
+  if (auth.role === ROLES.PROVOST) {
+    return units.every(
+      (unit) => String(unit.collegeId) === String(auth.collegeId)
+    );
+  }
+
+  return false;
+}
+
 /*
  * --------------------------------------------------
  * GET /api/requisitions/consolidate/organizations
@@ -123,10 +159,6 @@ export async function GET() {
       $ne: true,
     },
 
-    isConsolidated: {
-      $ne: true,
-    },
-
     consolidatedInto: {
       $exists: false,
     },
@@ -142,26 +174,10 @@ export async function GET() {
     ...baseQuery,
   };
 
-  /*
-   * DEAN
-   *
-   * A Dean only consolidates requisitions from
-   * their own college and faculty.
-   */
-  if (auth.role === ROLES.DEAN) {
-    query.collegeId = auth.collegeId;
-    query.facultyId = auth.facultyId;
-  }
+  // Organizational scope is applied after loading because a consolidated
+  // requisition can represent several colleges/faculties and therefore does
+  // not have a single reliable top-level organization field.
 
-  /*
-   * PROVOST
-   *
-   * A Provost can consolidate requisitions from
-   * all faculties/departments in their college.
-   */
-  else if (auth.role === ROLES.PROVOST) {
-    query.collegeId = auth.collegeId;
-  }
 
   /*
    * VC
@@ -200,8 +216,14 @@ export async function GET() {
           "requester",
           "fullName email role"
         )
+        .populate(
+          "originalInitiators.requester",
+          "fullName role"
+        )
         .lean()
     ).filter((requisition) => {
+      if (!isWithinScope(requisition, auth)) return false;
+
       /*
        * Dean/Provost: being in their scope isn't enough —
        * it must actually be THEIR turn to act on it right
@@ -256,14 +278,15 @@ export async function GET() {
   const organizationMap = new Map();
 
   for (const requisition of requisitions) {
+    const displayUnit = getRequisitionUnits(requisition)[0] || {};
     const collegeId =
-      requisition.collegeId || "N/A";
+      displayUnit.collegeId || requisition.collegeId || "N/A";
 
     const facultyId =
-      requisition.facultyId || "N/A";
+      displayUnit.facultyId || requisition.facultyId || "N/A";
 
     const department =
-      requisition.department || "N/A";
+      displayUnit.department || requisition.department || "N/A";
 
     if (!organizationMap.has(collegeId)) {
       organizationMap.set(collegeId, {
