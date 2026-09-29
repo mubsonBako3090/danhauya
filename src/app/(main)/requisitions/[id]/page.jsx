@@ -40,6 +40,7 @@ import {
 
 import {
   ROLES,
+  ROLE_LABELS,
 } from "@/constants/roles";
 
 import styles from "./page.module.css";
@@ -202,26 +203,35 @@ export default function RequisitionDetailPage() {
 
               <dd>
                 {requisition.isConsolidated &&
-                Array.isArray(requisition.originalInitiators) &&
-                requisition.originalInitiators.length > 0
-                  ? requisition.originalInitiators.map((entry, index) => (
-                      <span key={`${entry.user?._id || entry.user || "initiator"}-${index}`}>
-                        {entry.user?.fullName || "Unknown initiator"}
-                        {entry.role ? ` (${entry.role})` : ""}
-                        {index < requisition.originalInitiators.length - 1 ? ", " : ""}
-                      </span>
-                    ))
+                requisition.originalInitiators?.length
+                  ? requisition.originalInitiators.length === 1
+                    ? `${requisition.originalInitiators[0].requester?.fullName || "Unknown"} (${ROLE_LABELS[requisition.originalInitiators[0].role] || requisition.originalInitiators[0].role || "Unknown role"})`
+                    : `Multiple original initiators (${[...new Set(requisition.originalInitiators.map((entry) => ROLE_LABELS[entry.role] || entry.role).filter(Boolean))].join(", ") || "roles not recorded"})`
                   : requisition.requester?.fullName}
               </dd>
 
               {requisition.isConsolidated && (
                 <>
-                  <dt>Consolidated By</dt>
+                  <dt>
+                    Consolidated By
+                  </dt>
                   <dd>
-                    {requisition.consolidatedBy?.fullName || "Unknown"}
-                    {requisition.consolidatedBy?.role
-                      ? ` (${requisition.consolidatedBy.role})`
-                      : ""}
+                    {requisition.consolidatedBy?.fullName || requisition.requester?.fullName || "Unknown"}
+                    {requisition.consolidatedByRole ? ` (${requisition.consolidatedByRole})` : ""}
+                  </dd>
+
+                  <dt>
+                    Source Requisitions
+                  </dt>
+                  <dd>
+                    {requisition.sourceRequisitions?.length
+                      ? requisition.sourceRequisitions.map((source, index) => (
+                          <span key={source._id || index}>
+                            {index > 0 ? ", " : ""}
+                            {source.requisitionNumber || source._id}
+                          </span>
+                        ))
+                      : "None"}
                   </dd>
                 </>
               )}
