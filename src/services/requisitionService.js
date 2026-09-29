@@ -418,21 +418,52 @@ export async function saveDraft({
      *
      * Normal drafts keep the original requester-only rule.
      */
+    // Load the exact requisition first, then authorize the editor.
+    // This is deliberately done in two steps for consolidated drafts: older
+    // consolidated records may have the original requester in `requester`,
+    // while the person resuming the representative is stored in
+    // `consolidatedBy`. A compound Mongo query made the draft appear
+    // "not found" when either legacy field was missing or stored differently.
     requisition =
-      await Requisition.findOne({
-        _id: requisitionId,
-        $or: [
-          { requester: requesterUser.id },
-          {
-            isConsolidated: true,
-            consolidatedBy: requesterUser.id,
-          },
-        ],
-      });
+      await Requisition.findById(
+        requisitionId
+      );
 
     if (!requisition) {
       throw new Error(
         "Requisition not found."
+      );
+    }
+
+    const isRequester =
+      String(requisition.requester) ===
+      String(requesterUser.id);
+
+    const isConsolidator =
+      requisition.isConsolidated &&
+      requisition.consolidatedBy &&
+      String(requisition.consolidatedBy) ===
+      String(requesterUser.id);
+
+    const isOriginalInitiator =
+      requisition.isConsolidated &&
+      Array.isArray(
+        requisition.originalInitiators
+      ) &&
+      requisition.originalInitiators.some(
+        (initiator) =>
+          initiator?.user &&
+          String(initiator.user) ===
+            String(requesterUser.id)
+      );
+
+    if (
+      !isRequester &&
+      !isConsolidator &&
+      !isOriginalInitiator
+    ) {
+      throw new Error(
+        "You are not authorized to edit this requisition."
       );
     }
 
