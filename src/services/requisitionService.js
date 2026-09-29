@@ -409,61 +409,17 @@ export async function saveDraft({
    */
 
   if (requisitionId) {
-    /*
-     * Consolidated drafts are created from source requisitions, so their
-     * `requester` is the original initiator (or the first original
-     * initiator), not necessarily the user who performed the consolidation.
-     * The consolidator must therefore be allowed to resume/save the
-     * representative draft through `consolidatedBy` as well.
-     *
-     * Normal drafts keep the original requester-only rule.
-     */
-    // Load the exact requisition first, then authorize the editor.
-    // This is deliberately done in two steps for consolidated drafts: older
-    // consolidated records may have the original requester in `requester`,
-    // while the person resuming the representative is stored in
-    // `consolidatedBy`. A compound Mongo query made the draft appear
-    // "not found" when either legacy field was missing or stored differently.
     requisition =
-      await Requisition.findById(
-        requisitionId
-      );
+      await Requisition.findOne({
+        _id: requisitionId,
+
+        requester:
+          requesterUser.id,
+      });
 
     if (!requisition) {
       throw new Error(
         "Requisition not found."
-      );
-    }
-
-    const isRequester =
-      String(requisition.requester) ===
-      String(requesterUser.id);
-
-    const isConsolidator =
-      requisition.isConsolidated &&
-      requisition.consolidatedBy &&
-      String(requisition.consolidatedBy) ===
-      String(requesterUser.id);
-
-    const isOriginalInitiator =
-      requisition.isConsolidated &&
-      Array.isArray(
-        requisition.originalInitiators
-      ) &&
-      requisition.originalInitiators.some(
-        (initiator) =>
-          initiator?.user &&
-          String(initiator.user) ===
-            String(requesterUser.id)
-      );
-
-    if (
-      !isRequester &&
-      !isConsolidator &&
-      !isOriginalInitiator
-    ) {
-      throw new Error(
-        "You are not authorized to edit this requisition."
       );
     }
 
@@ -513,52 +469,24 @@ export async function saveDraft({
       requesterUser.role ===
         ROLES.PROVOST
     ) {
-      if (requisition.isConsolidated) {
-        /*
-         * A representative requisition owns the organization snapshot
-         * inherited from its source requisitions. Editing it must not turn
-         * the consolidator into the requester or replace the source units
-         * with the consolidator's own organization.
-         */
-        requisition.collegeId =
-          requisition.collegeId;
+      requisition.collegeId =
+        data.collegeId;
 
-        requisition.facultyId =
-          requisition.facultyId;
+      requisition.facultyId =
+        data.facultyId;
 
-        requisition.department =
-          requisition.department;
+      requisition.department =
+        data.department;
 
-        requisition.isConsolidated =
-          true;
+      requisition.isConsolidated =
+        data.isConsolidated;
 
-        requisition.requestingUnits =
-          requisition.requestingUnits || [];
-      } else {
-        requisition.collegeId =
-          data.collegeId;
-
-        requisition.facultyId =
-          data.facultyId;
-
-        requisition.department =
-          data.department;
-
-        requisition.isConsolidated =
-          data.isConsolidated;
-
-        requisition.requestingUnits =
-          data.requestingUnits;
-      }
+      requisition.requestingUnits =
+        data.requestingUnits;
     }
 
-    /*
-     * Preserve the original requester/role on consolidated records.
-     * `consolidatedBy` identifies who performed the consolidation.
-     */
     if (
-      !requisition.requesterRole &&
-      !requisition.isConsolidated
+      !requisition.requesterRole
     ) {
       requisition.requesterRole =
         requesterUser.role;
@@ -645,10 +573,11 @@ export async function submitRequisition({
   requesterUser,
 }) {
   /*
-   * Consolidated representatives may be submitted by the user who created
-   * the consolidation, even though `requester` is preserved as the original
-   * initiator for traceability. Load by ID first, then apply the same
-   * authorization rules used when saving the draft.
+   * A consolidated requisition is a representative record for the
+   * original requisitions. The person who created the representative
+   * (consolidatedBy) is therefore allowed to submit it even though the
+   * representative retains its source/requester information for
+   * traceability. Ordinary requisitions remain requester-owned.
    */
   const requisition =
     await Requisition.findById(
@@ -661,33 +590,17 @@ export async function submitRequisition({
     );
   }
 
-  const isRequester =
-    String(requisition.requester) ===
-    String(requesterUser.id);
-
   const isConsolidator =
     requisition.isConsolidated &&
     requisition.consolidatedBy &&
     String(requisition.consolidatedBy) ===
+      String(requesterUser.id);
+
+  const isRequester =
+    String(requisition.requester) ===
     String(requesterUser.id);
 
-  const isOriginalInitiator =
-    requisition.isConsolidated &&
-    Array.isArray(
-      requisition.originalInitiators
-    ) &&
-    requisition.originalInitiators.some(
-      (initiator) =>
-        initiator?.user &&
-        String(initiator.user) ===
-          String(requesterUser.id)
-    );
-
-  if (
-    !isRequester &&
-    !isConsolidator &&
-    !isOriginalInitiator
-  ) {
+  if (!isRequester && !isConsolidator) {
     throw new Error(
       "You are not authorized to submit this requisition."
     );
@@ -800,16 +713,145 @@ export async function submitRequisition({
    */
 
   /*
-   * V6: a Procurement-created consolidation is not an ordinary
-   * Procurement-authored requisition. Its source requisitions may already
-   * be approved, but the NEW consolidated record still needs Procurement
-   * market-survey review before its own VC decision.
+   * --------------------------------------------------
+   * CONSOLIDATED REPRESENTATIVE ROUTING
+   * --------------------------------------------------
+   *
+   * A consolidated requisition is NOT a brand-new requisition that
+   * should restart at HOD. It represents the selected source
+   * requisitions and must continue from the stage at which the
+   * consolidation was performed.
+   *
+   * Examples:
+   *   Dean consolidation   -> Provost -> Procurement Review -> VC -> Processing
+   *   Provost consolidation-> Procurement Review -> VC -> Processing
+   *   Procurement intake   -> Procurement Review -> VC -> Processing
+   *   Procurement approved -> Processing
+   *
+   * The representative has no single top-level college/faculty because
+   * it may contain several source units, so derive the routing location
+   * from requestingUnits when the next authority needs it.
    */
-  const routingRequesterRole =
-    requisition.isConsolidated &&
-    requisition.requesterRole === ROLES.PROCUREMENT
-      ? ROLES.PROVOST
-      : requisition.requesterRole;
+  let routingRequesterRole =
+    requisition.requesterRole;
+
+  let routingCollegeId =
+    requisition.collegeId;
+
+  let routingFacultyId =
+    requisition.facultyId;
+
+  let routingDepartment =
+    requisition.department;
+
+  if (requisition.isConsolidated) {
+    const units =
+      Array.isArray(requisition.requestingUnits)
+        ? requisition.requestingUnits
+        : [];
+
+    const sourceIds =
+      Array.isArray(requisition.sourceRequisitions)
+        ? requisition.sourceRequisitions
+        : [];
+
+    const sourceRequisitions =
+      sourceIds.length > 0
+        ? await Requisition.find({
+            _id: { $in: sourceIds },
+          }).lean()
+        : [];
+
+    const sourceSteps =
+      sourceRequisitions
+        .map((source) =>
+          source.approvalChain?.[source.currentStepIndex]
+        )
+        .filter(Boolean);
+
+    const allSourcesApproved =
+      sourceRequisitions.length > 0 &&
+      sourceRequisitions.every(
+        (source) =>
+          source.status ===
+          REQUISITION_STATUS.APPROVED
+      );
+
+    const isProcurementIntakeRepresentative =
+      sourceSteps.length > 0 &&
+      sourceSteps.every(
+        (step) =>
+          step.role === ROLES.PROCUREMENT &&
+          step.type === "procurement_review"
+      );
+
+    /*
+     * Already-approved Procurement consolidation:
+     * the market survey/VC approval already belongs to the source
+     * requisitions. Do not send the representative through HOD,
+     * Market Survey or VC again. It enters Processing directly.
+     */
+    if (
+      requisition.requesterRole === ROLES.PROCUREMENT &&
+      allSourcesApproved
+    ) {
+      routingRequesterRole = ROLES.VC;
+    }
+    /*
+     * Procurement consolidation of intake requisitions: the
+     * representative is still before VC and must enter the
+     * Procurement market-survey stage. Using PROVOST as the routing
+     * anchor gives us Procurement Review -> VC without creating an
+     * artificial HOD/Dean approval.
+     */
+    else if (
+      requisition.requesterRole === ROLES.PROCUREMENT &&
+      isProcurementIntakeRepresentative
+    ) {
+      routingRequesterRole = ROLES.PROVOST;
+    }
+
+    /*
+     * Dean/Provost representatives keep their consolidator role as
+     * the routing anchor. buildApprovalChain already removes the
+     * consolidator's own/lower approval stages, so a Dean
+     * consolidation starts at Provost rather than HOD.
+     */
+
+    if (units.length > 0) {
+      const colleges = [
+        ...new Set(
+          units
+            .map((unit) => unit.collegeId)
+            .filter(Boolean)
+        ),
+      ];
+
+      const faculties = [
+        ...new Set(
+          units
+            .map((unit) => unit.facultyId)
+            .filter(Boolean)
+        ),
+      ];
+
+      routingCollegeId =
+        colleges.length === 1
+          ? colleges[0]
+          : undefined;
+
+      routingFacultyId =
+        colleges.length === 1 &&
+        faculties.length === 1
+          ? faculties[0]
+          : undefined;
+
+      routingDepartment =
+        units.length === 1
+          ? units[0].department
+          : undefined;
+    }
+  }
 
   const {
     chain,
@@ -823,13 +865,13 @@ export async function submitRequisition({
         requisition.requester,
 
       collegeId:
-        requisition.collegeId,
+        routingCollegeId,
 
       facultyId:
-        requisition.facultyId,
+        routingFacultyId,
 
       department:
-        requisition.department,
+        routingDepartment,
 
       estimatedCost:
         requisition.estimatedCost,
