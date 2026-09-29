@@ -349,7 +349,11 @@ export default function ConsolidateRequisitionPage() {
                                     </span>
                                     <span className={styles.reqCategory}>{req.category}</span>
                                     <span className={styles.reqRequester}>
-                                      {req.requester?.fullName || "Unknown requester"}
+                                      {req.isConsolidated && req.originalInitiators?.length
+                                        ? req.originalInitiators.length === 1
+                                          ? req.originalInitiators[0].requester?.fullName || "Unknown initiator"
+                                          : `Multiple initiators (${[...new Set(req.originalInitiators.map((entry) => entry.requester?.fullName).filter(Boolean))].length})`
+                                        : req.requester?.fullName || "Unknown requester"}
                                     </span>
                                   </span>
                                   <span className={styles.reqRight}>
