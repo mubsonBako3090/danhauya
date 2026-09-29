@@ -20,6 +20,106 @@ function getAuth() {
   return token ? verifyToken(token) : null;
 }
 
+function getRequisitionUnits(requisition) {
+  if (requisition?.isConsolidated && Array.isArray(requisition.requestingUnits)) {
+    return requisition.requestingUnits;
+  }
+
+  return [
+    {
+      collegeId: requisition?.collegeId,
+      facultyId: requisition?.facultyId,
+      department: requisition?.department,
+    },
+  ];
+}
+
+function isWithinRoleScope(requisition, auth) {
+  if (auth.role === ROLES.VC || auth.role === ROLES.PROCUREMENT || auth.role === ROLES.ADMIN) {
+    return true;
+  }
+
+  const units = getRequisitionUnits(requisition);
+
+  if (auth.role === ROLES.DEAN) {
+    return Boolean(
+      auth.collegeId &&
+      auth.facultyId &&
+      units.every(
+        (unit) =>
+          String(unit.collegeId) === String(auth.collegeId) &&
+          String(unit.facultyId) === String(auth.facultyId)
+      )
+    );
+  }
+
+  if (auth.role === ROLES.PROVOST) {
+    return Boolean(
+      auth.collegeId &&
+      units.every(
+        (unit) => String(unit.collegeId) === String(auth.collegeId)
+      )
+    );
+  }
+
+  return false;
+}
+
+async function collectOriginalInitiators(sourceRequisitions) {
+  const result = new Map();
+  const visited = new Set();
+
+  async function walk(requisition) {
+    const id = String(requisition._id);
+    if (visited.has(id)) return;
+    visited.add(id);
+
+    if (
+      Array.isArray(requisition.originalInitiators) &&
+      requisition.originalInitiators.length > 0
+    ) {
+      for (const entry of requisition.originalInitiators) {
+        if (!entry?.requester) continue;
+        const requesterId = String(entry.requester?._id || entry.requester);
+        result.set(requesterId, {
+          requester: entry.requester?._id || entry.requester,
+          role: entry.role || requisition.requesterRole,
+          requisition: entry.requisition || requisition._id,
+        });
+      }
+      return;
+    }
+
+    if (requisition.isConsolidated && requisition.sourceRequisitions?.length) {
+      const children = await Requisition.find({
+        _id: { $in: requisition.sourceRequisitions },
+      })
+        .select("requester requesterRole isConsolidated sourceRequisitions originalInitiators")
+        .lean();
+
+      for (const child of children) {
+        await walk(child);
+      }
+      return;
+    }
+
+    const requesterId = String(requisition.requester?._id || requisition.requester || "");
+    if (requesterId) {
+      result.set(requesterId, {
+        requester: requisition.requester?._id || requisition.requester,
+        role: requisition.requesterRole || requisition.requester?.role,
+        requisition: requisition._id,
+      });
+    }
+  }
+
+  for (const requisition of sourceRequisitions) {
+    await walk(requisition);
+  }
+
+  return [...result.values()];
+}
+
 /*
  * --------------------------------------------------
  * ALLOWED CONSOLIDATION ROLES
@@ -158,10 +258,7 @@ export async function POST(request) {
       _id: { $in: uniqueIds },
       status: { $in: statusFilter },
       awaitingRequesterAction: { $ne: true },
-      $or: [
-        { isConsolidated: { $ne: true } },
-        { isConsolidated: true, consolidatedInto: { $exists: false } },
-      ],
+      consolidatedInto: { $exists: false },
     }).lean();
 
     if (sourceRequisitions.length !== uniqueIds.length) {
@@ -280,52 +377,17 @@ export async function POST(request) {
      * --------------------------------------------------
      */
     for (const requisition of sourceRequisitions) {
-      if (auth.role === ROLES.DEAN) {
-        // Dean must have collegeId and facultyId in the token.
-        if (!auth.collegeId || !auth.facultyId) {
-          return NextResponse.json(
-            {
-              message:
-                "Dean role is missing required college/faculty information.",
-            },
-            { status: 403 }
-          );
-        }
-        if (
-          String(requisition.collegeId) !== String(auth.collegeId) ||
-          String(requisition.facultyId) !== String(auth.facultyId)
-        ) {
-          return NextResponse.json(
-            {
-              message:
-                "A Dean can only consolidate requisitions from their own faculty.",
-            },
-            { status: 403 }
-          );
-        }
+      if (!isWithinRoleScope(requisition, auth)) {
+        return NextResponse.json(
+          {
+            message:
+              auth.role === ROLES.DEAN
+                ? "A Dean can only consolidate requisitions from their own faculty."
+                : "A Provost can only consolidate requisitions from their own college.",
+          },
+          { status: 403 }
+        );
       }
-
-      if (auth.role === ROLES.PROVOST) {
-        if (!auth.collegeId) {
-          return NextResponse.json(
-            {
-              message:
-                "Provost role is missing required college information.",
-            },
-            { status: 403 }
-          );
-        }
-        if (String(requisition.collegeId) !== String(auth.collegeId)) {
-          return NextResponse.json(
-            {
-              message:
-                "A Provost can only consolidate requisitions from their own college.",
-            },
-            { status: 403 }
-          );
-        }
-      }
-      // VC, PROCUREMENT, ADMIN have university‑wide access – no additional checks.
     }
 
     /*
@@ -335,15 +397,28 @@ export async function POST(request) {
      */
     const consolidatedItems = [];
     for (const requisition of sourceRequisitions) {
+      const sourceUnits = getRequisitionUnits(requisition);
+      const fallbackUnit = sourceUnits[0] || {};
+
       for (const item of requisition.items || []) {
         consolidatedItems.push({
           name: item.name,
-          requestingCollegeId: item.requestingCollegeId || requisition.collegeId,
-          requestingFacultyId: item.requestingFacultyId || requisition.facultyId,
-          requestingDepartment: item.requestingDepartment || requisition.department,
+          requestingCollegeId:
+            item.requestingCollegeId || fallbackUnit.collegeId,
+          requestingFacultyId:
+            item.requestingFacultyId || fallbackUnit.facultyId,
+          requestingDepartment:
+            item.requestingDepartment || fallbackUnit.department,
+          // The direct source is the owner of this copied item. If the
+          // source is itself consolidated, its descendants remain reachable
+          // through that source's own sourceRequisitions tree.
           sourceRequisitionId: requisition._id,
           quantity: Number(item.quantity || 0),
           unitCost: Number(item.unitCost || 0),
+          requestedUnitCost: item.requestedUnitCost,
+          requestedTotalCost: item.requestedTotalCost,
+          procurementUnitCost: item.procurementUnitCost,
+          procurementNote: item.procurementNote,
           totalCost: Number(
             item.totalCost ??
               (Number(item.quantity || 0) * Number(item.unitCost || 0))
@@ -376,17 +451,19 @@ export async function POST(request) {
      */
     const unitMap = new Map();
     for (const requisition of sourceRequisitions) {
-      const key = [
-        requisition.collegeId,
-        requisition.facultyId,
-        requisition.department,
-      ].join("|");
-      if (!unitMap.has(key)) {
-        unitMap.set(key, {
-          collegeId: requisition.collegeId,
-          facultyId: requisition.facultyId,
-          department: requisition.department,
-        });
+      for (const unit of getRequisitionUnits(requisition)) {
+        const key = [
+          unit.collegeId,
+          unit.facultyId,
+          unit.department,
+        ].join("|");
+        if (!unitMap.has(key)) {
+          unitMap.set(key, {
+            collegeId: unit.collegeId,
+            facultyId: unit.facultyId,
+            department: unit.department,
+          });
+        }
       }
     }
     const requestingUnits = [...unitMap.values()];
@@ -585,30 +662,7 @@ export async function POST(request) {
           approvalChain: [],
         };
 
-    /*
-     * Preserve the people who originally initiated the selected
-     * requisitions. For nested consolidation, inherit the child's
-     * original initiators instead of replacing them with the new
-     * consolidator.
-     */
-    const originalInitiatorMap = new Map();
-    for (const requisition of sourceRequisitions) {
-      const initiators = Array.isArray(requisition.originalInitiators) && requisition.originalInitiators.length
-        ? requisition.originalInitiators
-        : [{ user: requisition.requester, role: requisition.requesterRole }];
-
-      for (const initiator of initiators) {
-        if (!initiator?.user) continue;
-        const key = `${String(initiator.user)}:${initiator.role || "unknown"}`;
-        if (!originalInitiatorMap.has(key)) {
-          originalInitiatorMap.set(key, {
-            user: initiator.user,
-            role: initiator.role || requisition.requesterRole,
-          });
-        }
-      }
-    }
-    const originalInitiators = [...originalInitiatorMap.values()];
+    const originalInitiators = await collectOriginalInitiators(sourceRequisitions);
 
     /*
      * --------------------------------------------------
@@ -616,12 +670,13 @@ export async function POST(request) {
      * --------------------------------------------------
      */
     const consolidated = await Requisition.create({
-      requester: originalInitiators[0]?.user || auth.sub,
-      requesterRole: originalInitiators.length === 1 ? originalInitiators[0].role : "multiple",
-      originalInitiators,
+      requester: auth.sub,
+      requesterRole: auth.role,
       isConsolidated: true,
       sourceRequisitions: sourceRequisitions.map((r) => r._id),
       consolidatedBy: auth.sub,
+      consolidatedByRole: auth.role,
+      originalInitiators,
       requestingUnits,
       // If multiple units, store "N/A" at top level – keep as string for compatibility.
       collegeId: commonCollegeId,
@@ -650,11 +705,9 @@ export async function POST(request) {
       {
         _id: { $in: sourceRequisitions.map((r) => r._id) },
         // Only update if they are still eligible (no consolidatedInto yet).
+        // A source may itself be a consolidated representative; nested
+        // consolidation is intentionally supported.
         consolidatedInto: { $exists: false },
-        $or: [
-          { isConsolidated: { $ne: true } },
-          { isConsolidated: true },
-        ],
       },
       {
         $set: {
@@ -799,6 +852,12 @@ export async function POST(request) {
       entityId: consolidated._id,
       details: {
         requesterRole: auth.role,
+        consolidatedByRole: auth.role,
+        originalInitiators: originalInitiators.map((entry) => ({
+          requester: String(entry.requester),
+          role: entry.role,
+          requisition: String(entry.requisition),
+        })),
         outcomeStatus: consolidated.status,
         sourceRequisitions: sourceRequisitions.map((r) => String(r._id)),
         requestingUnits,
