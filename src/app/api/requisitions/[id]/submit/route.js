@@ -44,11 +44,18 @@ export async function POST(
   try {
     await connectDB();
 
+    /*
+     * Load the requisition by ID first.
+     *
+     * Consolidated representatives preserve the original requester
+     * for traceability, while the user submitting the representative
+     * may be the person who performed the consolidation. The service
+     * performs the actual authorization check.
+     */
     const existing =
-      await Requisition.findOne({
-        _id: params.id,
-        requester: auth.sub,
-      }).lean();
+      await Requisition.findById(
+        params.id
+      ).lean();
 
     if (!existing) {
       return NextResponse.json(
