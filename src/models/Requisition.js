@@ -530,6 +530,7 @@ requestingUnits: [
         "ready",
         "processing",
         "completed",
+        "rejected",
       ],
       default: undefined,
     },
