@@ -568,6 +568,90 @@ export async function saveDraft({
  * --------------------------------------------------
  */
 
+
+/*
+ * Keep every source in a consolidated tree aligned when the representative
+ * is resubmitted after a return/rejection-for-resubmission. We match the
+ * representative's new current step by role/type/approver instead of by a
+ * raw step index because source chains may have different leading stages.
+ */
+async function syncConsolidatedSourcesAfterResubmission(representative) {
+  if (
+    !representative?.isConsolidated ||
+    !Array.isArray(representative.sourceRequisitions) ||
+    representative.sourceRequisitions.length === 0
+  ) return;
+
+  const targetStep = representative.approvalChain?.[representative.currentStepIndex];
+  if (!targetStep) return;
+
+  const visited = new Set();
+
+  async function walk(ids) {
+    const sources = await Requisition.find({ _id: { $in: ids } });
+
+    for (const source of sources) {
+      const sourceId = String(source._id);
+      if (visited.has(sourceId)) continue;
+      visited.add(sourceId);
+
+      const childIds = source.isConsolidated && Array.isArray(source.sourceRequisitions)
+        ? [...source.sourceRequisitions]
+        : [];
+
+      const matchingIndex = source.approvalChain?.findIndex((step) =>
+        step?.role === targetStep.role &&
+        step?.type === targetStep.type &&
+        String(step?.approver) === String(targetStep.approver)
+      );
+
+      if (matchingIndex >= 0) {
+        source.currentStepIndex = matchingIndex;
+        source.status = REQUISITION_STATUS.PENDING;
+        source.awaitingRequesterAction = false;
+        source.finalApprovalAt = undefined;
+        source.decidedAt = undefined;
+        source.procurementReceivedAt = undefined;
+        source.procurementStartedAt = undefined;
+        source.procurementCompletedAt = undefined;
+
+        if (targetStep.type === "procurement_review") {
+          source.procurementStatus = "review";
+        } else if (targetStep.type === "processing") {
+          source.procurementStatus = "ready";
+        } else {
+          source.procurementStatus = undefined;
+          source.procurementOfficer = undefined;
+        }
+
+        source.comments.push({
+          author: representative.consolidatedBy || representative.requester,
+          message: `Resubmitted through consolidated requisition ${representative.requisitionNumber || representative._id}.`,
+        });
+
+        await source.save();
+
+        await AuditLog.create({
+          actor: representative.consolidatedBy || representative.requester,
+          action: "requisition.consolidated_source_resubmitted",
+          entityType: "Requisition",
+          entityId: source._id,
+          details: {
+            representativeRequisition: representative._id,
+            targetStepRole: targetStep.role,
+            targetStepType: targetStep.type,
+            targetStepIndex: matchingIndex,
+          },
+        });
+      }
+
+      if (childIds.length) await walk(childIds);
+    }
+  }
+
+  await walk(representative.sourceRequisitions);
+}
+
 export async function submitRequisition({
   requisitionId,
   requesterUser,
@@ -933,6 +1017,10 @@ export async function submitRequisition({
 
   await requisition.save();
 
+  if (isReturnedToRequester && requisition.isConsolidated) {
+    await syncConsolidatedSourcesAfterResubmission(requisition);
+  }
+
   await AuditLog.create({
     actor:
       requesterUser.id,
@@ -1104,17 +1192,10 @@ export async function createConsolidatedRequisition({
     }
 
     /*
-     * Do not allow an already consolidated
-     * requisition to be consolidated again.
+     * Already-consolidated representatives are valid sources for a new
+     * consolidation. Their sourceRequisitions tree is preserved rather
+     * than duplicated.
      */
-    if (requisition.isConsolidated) {
-      throw new Error(
-        `Requisition ${
-          requisition.requisitionNumber ||
-          requisition._id
-        } has already been consolidated.`
-      );
-    }
   }
 
   /*
