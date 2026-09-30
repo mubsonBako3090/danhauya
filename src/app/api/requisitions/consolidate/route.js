@@ -10,6 +10,7 @@ import Approval from "@/models/Approval";
 import User from "@/models/User";
 
 import { generateRequisitionNumber } from "@/services/requisitionService";
+import { syncConsolidatedSourcesAfterApproval } from "@/services/approvalService";
 
 import { ROLES } from "@/constants/roles";
 import { buildApprovalChain } from "@/lib/routing";
@@ -258,7 +259,10 @@ export async function POST(request) {
       _id: { $in: uniqueIds },
       status: { $in: statusFilter },
       awaitingRequesterAction: { $ne: true },
-      consolidatedInto: { $exists: false },
+      $or: [
+        { isConsolidated: true, consolidatedInto: { $exists: false } },
+        { isConsolidated: { $ne: true }, consolidatedInto: { $exists: false } },
+      ],
     }).lean();
 
     if (sourceRequisitions.length !== uniqueIds.length) {
@@ -704,9 +708,10 @@ export async function POST(request) {
     const updateResult = await Requisition.updateMany(
       {
         _id: { $in: sourceRequisitions.map((r) => r._id) },
-        // Only update if they are still eligible (no consolidatedInto yet).
-        // A source may itself be a consolidated representative; nested
-        // consolidation is intentionally supported.
+        // Only update if this source is not already nested under another
+        // representative. A consolidated representative created at the top
+        // level has no consolidatedInto yet and can therefore become a child
+        // of the new representative. Once nested, it cannot be reused again.
         consolidatedInto: { $exists: false },
       },
       {
@@ -837,6 +842,26 @@ export async function POST(request) {
       }
       if (sourceApprovalRecords.length) {
         await Approval.insertMany(sourceApprovalRecords);
+      }
+
+      // The direct sources above are advanced by this endpoint. If any of
+      // those sources is itself consolidated, recursively mirror the same
+      // approval into its descendants so nested consolidation never leaves
+      // the original HOD requisitions stuck at the old step.
+      if (sourceRequisitions.some((source) => source.isConsolidated)) {
+        const approvedStep = sourceRequisitions[0]?.approvalChain?.[
+          sourceRequisitions[0]?.currentStepIndex
+        ];
+
+        if (approvedStep) {
+          await syncConsolidatedSourcesAfterApproval({
+            representative: consolidated,
+            approvedStep,
+            approverId: auth.sub,
+            comment: `Approved through consolidation ${consolidated.requisitionNumber || consolidated._id}.`,
+            recordApproval: true,
+          });
+        }
       }
     }
 
