@@ -78,31 +78,33 @@ export function getRequisitionVisibilityQuery(auth) {
     case ROLES.HOD:
       return {
         $or: [
-          { requester: auth.sub },
+          // An HOD sees their own original requisitions, but not a
+          // consolidated representative created from those requisitions.
+          {
+            requester: auth.sub,
+            isConsolidated: { $ne: true },
+          },
           {
             collegeId: auth.collegeId,
             facultyId: auth.facultyId,
             department: auth.department,
+            isConsolidated: { $ne: true },
           },
-          {
-            requestingUnits: {
-              $elemMatch: {
-                collegeId: auth.collegeId,
-                facultyId: auth.facultyId,
-                department: auth.department,
-              },
-            },
-          },
+          // A consolidated representative is visible to the user who
+          // actually performed the consolidation (for example a Dean),
+          // not to every source HOD represented by it.
+          { consolidatedBy: auth.sub },
         ],
       };
 
     case ROLES.DEAN:
       return {
         $or: [
-          { requester: auth.sub },
+          { requester: auth.sub, isConsolidated: { $ne: true } },
           {
             collegeId: auth.collegeId,
             facultyId: auth.facultyId,
+            isConsolidated: { $ne: true },
           },
           {
             requestingUnits: {
@@ -111,22 +113,26 @@ export function getRequisitionVisibilityQuery(auth) {
                 facultyId: auth.facultyId,
               },
             },
+            isConsolidated: { $ne: true },
           },
+          { consolidatedBy: auth.sub },
         ],
       };
 
     case ROLES.PROVOST:
       return {
         $or: [
-          { requester: auth.sub },
-          { collegeId: auth.collegeId },
+          { requester: auth.sub, isConsolidated: { $ne: true } },
+          { collegeId: auth.collegeId, isConsolidated: { $ne: true } },
           {
             requestingUnits: {
               $elemMatch: {
                 collegeId: auth.collegeId,
               },
             },
+            isConsolidated: { $ne: true },
           },
+          { consolidatedBy: auth.sub },
         ],
       };
 
@@ -189,6 +195,14 @@ export function canViewRequisition(auth, requisition) {
   if (!auth || !requisition) return false;
 
   if ([ROLES.ADMIN, ROLES.VC].includes(auth.role)) return true;
+
+  // A source HOD should see the original requisition represented in a
+  // consolidation, not the consolidated representative as a duplicate.
+  // The representative remains visible to its actual consolidator.
+  if (auth.role === ROLES.HOD && requisition.isConsolidated) {
+    return same(requisition.consolidatedBy, auth.sub);
+  }
+
   if (same(requisition.requester?._id || requisition.requester, auth.sub)) return true;
 
   // Anyone who is explicitly the approver of the CURRENT workflow step
