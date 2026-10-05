@@ -285,6 +285,11 @@ export async function POST(request) {
       );
     });
 
+    const acceptedProcurementSources = sourceRequisitions.filter((requisition) =>
+      requisition.status === REQUISITION_STATUS.APPROVED &&
+      ["ready", "accepted"].includes(requisition.procurementStatus)
+    );
+
     if (isPostApprovalConsolidator && auth.role === ROLES.PROCUREMENT) {
       const approvedSources = sourceRequisitions.filter(
         (requisition) => requisition.status === REQUISITION_STATUS.APPROVED
@@ -558,28 +563,14 @@ export async function POST(request) {
     const now = new Date();
 
     /*
-     * V6: a Procurement-created consolidation is still a NEW
-     * requisition. Even though its source requisitions already passed
-     * VC, the consolidated record must receive the same Procurement
-     * market-survey -> VC -> Procurement processing workflow.
-     *
-     * We build that chain explicitly instead of treating the consolidated
-     * record as already finally approved. This preserves the source
-     * requisitions' completed histories while making the new combined
-     * requirement undergo its own market-price validation.
+     * Accepted Procurement consolidation is the final hand-off document.
+     * The selected sources have already completed institutional approval,
+     * so the new representative must not restart the approval chain or
+     * create another market-survey/VC step.
      */
-    let postApprovalConsolidationChain = null;
-    if (auth.role === ROLES.PROCUREMENT && !isProcurementIntakeConsolidation) {
-      const routed = await buildApprovalChain({
-        requesterRole: ROLES.PROVOST,
-        requesterId: auth.sub,
-        collegeId: commonCollegeId,
-        facultyId: commonFacultyId,
-        department: singleUnit?.department || "N/A",
-        estimatedCost,
-      });
-      postApprovalConsolidationChain = routed.chain;
-    }
+    const isAcceptedProcurementConsolidation =
+      auth.role === ROLES.PROCUREMENT &&
+      acceptedProcurementSources.length === sourceRequisitions.length;
 
     const intakeSourceChain = isProcurementIntakeConsolidation
       ? sourceRequisitions[0]?.approvalChain || []
@@ -587,10 +578,6 @@ export async function POST(request) {
     const sourceVcStep = intakeSourceChain.find(
       (step) => step.role === ROLES.VC && step.type === "approval"
     );
-    const sourceProcessingStep = intakeSourceChain.find(
-      (step) => step.role === ROLES.PROCUREMENT && step.type === "processing"
-    );
-
     if (isProcurementIntakeConsolidation && !sourceVcStep) {
       return NextResponse.json(
         {
@@ -608,13 +595,6 @@ export async function POST(request) {
         }
       : null;
 
-    const intakeProcessingStep = isProcurementIntakeConsolidation
-      ? {
-          role: ROLES.PROCUREMENT,
-          approver: sourceProcessingStep?.approver || auth.sub,
-          type: "processing",
-        }
-      : null;
 
     const outcomeFields = isProcurementIntakeConsolidation
       ? {
@@ -627,11 +607,23 @@ export async function POST(request) {
               approver: sourceVcStep.approver,
               type: "approval",
             },
-            intakeProcessingStep,
           ],
           procurementStatus: "review",
           procurementOfficer: auth.sub,
           procurementAssignedBy: auth.sub,
+          procurementReceivedAt: now,
+        }
+      : isAcceptedProcurementConsolidation
+      ? {
+          status: REQUISITION_STATUS.APPROVED,
+          requisitionNumber: await generateRequisitionNumber(),
+          submittedAt: now,
+          finalApprovalAt: now,
+          decidedAt: now,
+          currentStepIndex: 0,
+          approvalChain: [],
+          procurementStatus: "accepted",
+          procurementOfficer: auth.sub,
           procurementReceivedAt: now,
         }
       : auth.role === ROLES.PROCUREMENT
@@ -649,14 +641,8 @@ export async function POST(request) {
           finalApprovalAt: now,
           decidedAt: now,
           currentStepIndex: 0,
-          approvalChain: [
-            {
-              role: ROLES.PROCUREMENT,
-              approver: procurementOfficer._id,
-              type: "processing",
-            },
-          ],
-          procurementStatus: "ready",
+          approvalChain: [],
+          procurementStatus: "accepted",
           procurementOfficer: procurementOfficer._id,
           procurementReceivedAt: now,
         }
@@ -782,12 +768,6 @@ export async function POST(request) {
         const nextStep = source.approvalChain?.[nextIndex];
 
         if (auth.role === ROLES.VC || currentSourceStep.role === ROLES.VC) {
-          const processingIndex = source.approvalChain?.findIndex(
-            (step) => step.role === ROLES.PROCUREMENT && step.type === "processing"
-          );
-          const processingStep =
-            processingIndex >= 0 ? source.approvalChain[processingIndex] : null;
-
           sourceUpdates.push({
             updateOne: {
               filter: { _id: source._id },
@@ -797,14 +777,9 @@ export async function POST(request) {
                   finalApprovalAt: consolidationDate,
                   decidedAt: consolidationDate,
                   awaitingRequesterAction: false,
-                  currentStepIndex: processingIndex >= 0 ? processingIndex : source.currentStepIndex,
-                  procurementStatus: "ready",
-                  ...(processingStep?.approver
-                    ? {
-                        procurementOfficer: processingStep.approver,
-                        procurementReceivedAt: consolidationDate,
-                      }
-                    : {}),
+                  currentStepIndex: source.currentStepIndex,
+                  procurementStatus: "accepted",
+                  procurementReceivedAt: consolidationDate,
                 },
               },
             },
