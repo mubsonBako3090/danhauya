@@ -242,9 +242,21 @@ export async function GET() {
           const isProcurementIntake =
             requisition.status === REQUISITION_STATUS.PENDING &&
             step?.role === ROLES.PROCUREMENT &&
-            step?.type === "procurement_review";
+            step?.type === "procurement_review" &&
+            requisition.procurementStatus === "review";
 
-          if (!isProcurementIntake) return false;
+          const isMarketSurveyedForDirector =
+            requisition.status === REQUISITION_STATUS.PENDING &&
+            step?.role === ROLES.PROCUREMENT &&
+            step?.type === "procurement_review" &&
+            requisition.procurementStatus === "director_review" &&
+            auth.procurementPosition === "director";
+
+          if (!isProcurementIntake && !isMarketSurveyedForDirector) return false;
+
+          if (isMarketSurveyedForDirector) {
+            return String(step.approver) === String(auth.sub);
+          }
 
           const supervisory =
             auth.procurementPosition === "director" ||
