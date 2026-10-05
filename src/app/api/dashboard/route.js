@@ -91,6 +91,65 @@ export async function GET() {
       });
     }
 
+    if (auth.role === ROLES.DEAN) {
+      const scopeUnits = {
+        $or: [
+          { collegeId: auth.collegeId, facultyId: auth.facultyId },
+          { requestingUnits: { $elemMatch: { collegeId: auth.collegeId, facultyId: auth.facultyId } } },
+        ],
+      };
+
+      const possiblePending = await Requisition.find({
+        status: { $in: [REQUISITION_STATUS.PENDING, REQUISITION_STATUS.RETURNED] },
+        awaitingRequesterAction: { $ne: true },
+        "approvalChain.approver": auth.sub,
+        ...scopeUnits,
+      }).select("_id currentStepIndex approvalChain status awaitingRequesterAction").lean();
+
+      const pendingMyStep = possiblePending.filter((requisition) => {
+        const currentStep = requisition.approvalChain?.[requisition.currentStepIndex];
+        return currentStep && String(currentStep.approver) === String(auth.sub) && currentStep.type === "approval";
+      }).length;
+
+      const consolidationCandidates = await Requisition.find({
+        status: { $in: [REQUISITION_STATUS.PENDING, REQUISITION_STATUS.RETURNED] },
+        awaitingRequesterAction: { $ne: true },
+        consolidatedInto: { $exists: false },
+        ...scopeUnits,
+        "approvalChain.approver": auth.sub,
+      }).select("currentStepIndex approvalChain").lean();
+
+      const readyForConsolidation = consolidationCandidates.filter((requisition) => {
+        const currentStep = requisition.approvalChain?.[requisition.currentStepIndex];
+        return currentStep && currentStep.type === "approval" && String(currentStep.approver) === String(auth.sub);
+      }).length;
+
+      const [returnedInScope, approvedInScope, rejectedInScope, myConsolidations, approvedByMe, returnedByMe, rejectedByMe, reviewedByMe] = await Promise.all([
+        Requisition.countDocuments({ ...scopeUnits, status: REQUISITION_STATUS.RETURNED }),
+        Requisition.countDocuments({ ...scopeUnits, status: REQUISITION_STATUS.APPROVED }),
+        Requisition.countDocuments({ ...scopeUnits, status: REQUISITION_STATUS.REJECTED }),
+        Requisition.countDocuments({ isConsolidated: true, consolidatedBy: auth.sub }),
+        Approval.countDocuments({ approver: auth.sub, action: APPROVAL_ACTIONS.APPROVE }),
+        Approval.countDocuments({ approver: auth.sub, action: APPROVAL_ACTIONS.RETURN }),
+        Approval.countDocuments({ approver: auth.sub, action: APPROVAL_ACTIONS.REJECT }),
+        Approval.countDocuments({ approver: auth.sub }),
+      ]);
+
+      return NextResponse.json({
+        role: auth.role,
+        pendingMyStep,
+        readyForConsolidation,
+        myConsolidations,
+        returnedInScope,
+        approvedInScope,
+        rejectedInScope,
+        approvedByMe,
+        returnedByMe,
+        rejectedByMe,
+        reviewedByMe,
+      });
+    }
+
     if (APPROVER_ROLES.includes(auth.role)) {
       const possiblePending = await Requisition.find({
         status: { $in: [REQUISITION_STATUS.PENDING, REQUISITION_STATUS.RETURNED] },
