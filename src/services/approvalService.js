@@ -188,87 +188,17 @@ export async function approveStep({
       false;
 
     /*
-     * Find Procurement stage.
-     */
-    const procurementStep =
-      requisition.approvalChain.find(
-        (approvalStep) =>
-          approvalStep.role ===
-            ROLES.PROCUREMENT &&
-          approvalStep.type ===
-            "processing"
-      );
-
-    /*
-     * Assign Procurement Officer.
-     */
-    let procurementOfficer = null;
-
-    if (
-      procurementStep?.approver
-    ) {
-      procurementOfficer =
-        await User.findById(
-          procurementStep.approver
-        );
-    }
-
-    /*
-     * If the chain does not contain a
-     * Procurement Officer, find an active one.
-     */
-    if (!procurementOfficer) {
-      procurementOfficer =
-        await User.findOne({
-          role: ROLES.PROCUREMENT,
-          accountStatus: "active",
-        });
-    }
-
-    if (!procurementOfficer) {
-      throw new Error(
-        "No active Procurement Officer is configured."
-      );
-    }
-
-    /*
-     * Move current stage to Procurement.
-     */
-    if (procurementStep) {
-      const procurementIndex =
-        requisition.approvalChain.findIndex(
-          (approvalStep) =>
-            approvalStep.role ===
-              ROLES.PROCUREMENT &&
-            approvalStep.type ===
-              "processing"
-        );
-
-      if (
-        procurementIndex >= 0
-      ) {
-        requisition.currentStepIndex =
-          procurementIndex;
-      }
-    }
-
-    /*
      * --------------------------------------------------
-     * PROCUREMENT STATUS
+     * PROCUREMENT ACCEPTANCE
      * --------------------------------------------------
      *
-     * VC has approved.
-     *
-     * Therefore Procurement can now begin.
+     * VC has given final institutional approval. The project boundary
+     * ends here: Procurement may use the accepted requisition as the
+     * hand-off document for the subsequent procurement process, which
+     * is outside this system.
      */
-    requisition.procurementStatus =
-      "ready";
-
-    requisition.procurementOfficer =
-      procurementOfficer._id;
-
-    requisition.procurementReceivedAt =
-      new Date();
+    requisition.procurementStatus = "accepted";
+    requisition.procurementReceivedAt = new Date();
 
     await requisition.save();
 
@@ -302,8 +232,8 @@ export async function approveStep({
         nextStage:
           ROLES.PROCUREMENT,
 
-        procurementOfficer:
-          procurementOfficer._id,
+        procurementStatus:
+          "accepted",
       },
     });
 
@@ -312,14 +242,6 @@ export async function approveStep({
      */
     await sendRequisitionApprovedEmail(
       requisition.requester,
-      requisition
-    );
-
-    /*
-     * Notify Procurement Officer.
-     */
-    await sendApprovalStepEmail(
-      procurementOfficer,
       requisition
     );
 
@@ -476,24 +398,12 @@ export async function syncConsolidatedSourcesAfterApproval({
       const nextStep = source.approvalChain?.[nextIndex];
 
       if (sourceStep.role === ROLES.VC) {
-        const processingIndex = source.approvalChain?.findIndex(
-          (step) => step.role === ROLES.PROCUREMENT && step.type === "processing"
-        );
-        const processingStep =
-          processingIndex >= 0 ? source.approvalChain[processingIndex] : null;
-
         source.status = REQUISITION_STATUS.APPROVED;
         source.finalApprovalAt = new Date();
         source.decidedAt = new Date();
         source.awaitingRequesterAction = false;
-        source.currentStepIndex =
-          processingIndex >= 0 ? processingIndex : source.currentStepIndex;
-        source.procurementStatus = "ready";
-
-        if (processingStep?.approver) {
-          source.procurementOfficer = processingStep.approver;
-          source.procurementReceivedAt = new Date();
-        }
+        source.procurementStatus = "accepted";
+        source.procurementReceivedAt = new Date();
       } else if (nextStep) {
         source.currentStepIndex = nextIndex;
         source.status = REQUISITION_STATUS.PENDING;
