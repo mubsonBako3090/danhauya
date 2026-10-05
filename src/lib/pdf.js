@@ -60,7 +60,8 @@ function formatDate(value) {
  */
 export function generateRequisitionPDF(
   requisition,
-  requesterUser
+  requesterUser,
+  documentType = "standard"
 ) {
   return new Promise((resolve, reject) => {
     let doc;
@@ -85,7 +86,9 @@ export function generateRequisitionPDF(
         margin: 50,
         bufferPages: true,
         info: {
-          Title: "Procurement Requisition",
+          Title: documentType === "procurement"
+            ? "Accepted Procurement Hand-off Document"
+            : "Procurement Requisition",
           Author: "Kaduna State University",
           Subject: "Digital Procurement Requisition",
         },
@@ -140,13 +143,18 @@ export function generateRequisitionPDF(
         .fontSize(18)
         .font("Helvetica-Bold")
         .text("Kaduna State University", {
-          align: "center",
-        });
+            align: "center",
+          }
+        );
 
       doc
         .fontSize(13)
         .font("Helvetica")
-        .text("Digital Procurement Requisition", {
+        .text(
+          documentType === "procurement"
+            ? "Accepted Procurement Hand-off Document"
+            : "Digital Procurement Requisition",
+          {
           align: "center",
         });
 
@@ -428,6 +436,46 @@ export function generateRequisitionPDF(
       }
 
       doc.moveDown(1);
+
+      if (documentType === "procurement") {
+        doc.moveDown(1);
+
+        doc
+          .fontSize(11)
+          .font("Helvetica-Bold")
+          .text("Procurement Hand-off");
+
+        doc.moveDown(0.4);
+        doc
+          .fontSize(10)
+          .font("Helvetica")
+          .text("Status: ACCEPTED")
+          .text("Purpose: Ready for the subsequent Procurement process outside this system.");
+
+        if (requisition.consolidatedBy) {
+          const consolidatorName = requisition.consolidatedBy.fullName || requesterUser?.fullName || "Unknown";
+          const consolidatorRole = requisition.consolidatedBy.role || "Procurement";
+          doc.text(`Consolidated By: ${safeText(consolidatorName)} (${safeText(consolidatorRole)})`);
+        }
+
+        const sources = Array.isArray(requisition.sourceRequisitions)
+          ? requisition.sourceRequisitions
+          : [];
+
+        if (sources.length) {
+          doc.moveDown(0.4);
+          doc.font("Helvetica-Bold").text("Source Requisitions");
+          doc.font("Helvetica");
+          sources.forEach((source, index) => {
+            doc.text(`${index + 1}. ${safeText(source.requisitionNumber || source._id)}`);
+          });
+        }
+
+        doc.moveDown(0.4);
+        doc
+          .font("Helvetica-Oblique")
+          .text("This document records an accepted Procurement requisition/consolidation and is not evidence that downstream tendering, vendor selection, LPO issuance, contracting, or other subsequent procurement activities have been completed.");
+      }
 
       /*
        * --------------------------------------------------

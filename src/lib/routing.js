@@ -202,45 +202,11 @@ export async function buildApprovalChain({
   }
 
   /*
-   * PROCUREMENT HAS A SECOND, POST-VC PROCESSING STAGE.
-   *
-   * Normal chain: HOD -> Dean -> Provost -> Procurement Review
-   * -> VC -> Procurement Processing
-   *
-   * Special creator chains above may already contain the first
-   * Procurement stage. Only append the final processing stage.
+   * The implemented system ends at Procurement acceptance after VC approval.
+   * The downstream procurement execution stage (tendering, vendor selection,
+   * LPO/contract processing, etc.) is outside this project's scope, so no
+   * post-VC processing step is appended to the approval chain.
    */
-  const procurementReviewStep = chain.find(
-    (step) =>
-      step.role === ROLES.PROCUREMENT &&
-      step.type === "procurement_review"
-  );
-
-  let processingApprover = procurementReviewStep?.approver || null;
-
-  /*
-   * Some special creator flows (for example a VC-created requisition)
-   * intentionally have no pre-VC Procurement Review stage. In those cases
-   * choose an operational Procurement staff member for the final processing
-   * stage. Never assign the requisition back to the requester when the
-   * requester is also a Procurement user.
-   */
-  if (!processingApprover) {
-    const processingUser = await resolveProcurementProcessingUser({
-      requesterId,
-    });
-    processingApprover = processingUser?._id;
-  }
-
-  if (!processingApprover) {
-    throw new Error("No active Procurement staff is configured for processing.");
-  }
-
-  chain.push({
-    role: ROLES.PROCUREMENT,
-    approver: processingApprover,
-    type: "processing",
-  });
 
   /*
    * Governor escalation remains represented in the
