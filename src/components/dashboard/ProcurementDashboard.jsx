@@ -62,11 +62,6 @@ export default function ProcurementDashboard({ user }) {
             <i className="bi bi-building-up" /> Awaiting VC
           </Button>
         </Link>
-        <Link href="/approvals?stage=processing">
-          <Button variant="secondary">
-            <i className="bi bi-gear" /> Processing
-          </Button>
-        </Link>
         <Link href="/approvals?stage=rejected">
           <Button variant="secondary">
             <i className="bi bi-x-circle" /> Rejected
@@ -88,21 +83,15 @@ export default function ProcurementDashboard({ user }) {
           tone="pending"
         />
         <StatCard
-          label="Ready for Processing"
-          value={loading ? "..." : stats?.readyForProcurement ?? 0}
-          icon="bi-box-seam"
+          label="Accepted"
+          value={loading ? "..." : stats?.acceptedCount ?? 0}
+          icon="bi-check-circle"
           tone="approved"
         />
         <StatCard
-          label="Processing"
-          value={loading ? "..." : stats?.processingCount ?? 0}
-          icon="bi-hourglass-split"
-          tone="pending"
-        />
-        <StatCard
-          label="Processing Completed"
-          value={loading ? "..." : stats?.completedCount ?? 0}
-          icon="bi-check-circle"
+          label="Accepted Consolidations"
+          value={loading ? "..." : stats?.acceptedConsolidationCount ?? 0}
+          icon="bi-file-earmark-pdf"
           tone="approved"
         />
         <StatCard
