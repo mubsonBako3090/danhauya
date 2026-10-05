@@ -36,6 +36,61 @@ export async function GET() {
       return NextResponse.json({ role: auth.role, draftCount, pendingCount, returnedCount, approvedCount, rejectedCount, totalCount });
     }
 
+    if (auth.role === ROLES.HOD) {
+      const requesterFilter = { requester: auth.sub };
+
+      const [
+        draftCount,
+        pendingCount,
+        returnedCount,
+        approvedCount,
+        rejectedCount,
+        totalCount,
+      ] = await Promise.all([
+        Requisition.countDocuments({ ...requesterFilter, status: REQUISITION_STATUS.DRAFT }),
+        Requisition.countDocuments({ ...requesterFilter, status: REQUISITION_STATUS.PENDING }),
+        Requisition.countDocuments({ ...requesterFilter, status: REQUISITION_STATUS.RETURNED }),
+        Requisition.countDocuments({ ...requesterFilter, status: REQUISITION_STATUS.APPROVED }),
+        Requisition.countDocuments({ ...requesterFilter, status: REQUISITION_STATUS.REJECTED }),
+        Requisition.countDocuments(requesterFilter),
+      ]);
+
+      const possiblePending = await Requisition.find({
+        status: { $in: [REQUISITION_STATUS.PENDING, REQUISITION_STATUS.RETURNED] },
+        awaitingRequesterAction: { $ne: true },
+        "approvalChain.approver": auth.sub,
+      })
+        .select("_id currentStepIndex approvalChain status awaitingRequesterAction")
+        .lean();
+
+      const pendingMyStep = possiblePending.filter((requisition) => {
+        const currentStep = requisition.approvalChain?.[requisition.currentStepIndex];
+        return currentStep && String(currentStep.approver) === String(auth.sub) && currentStep.type === "approval";
+      }).length;
+
+      const [approvedByMe, returnedByMe, rejectedByMe, reviewedByMe] = await Promise.all([
+        Approval.countDocuments({ approver: auth.sub, action: APPROVAL_ACTIONS.APPROVE }),
+        Approval.countDocuments({ approver: auth.sub, action: APPROVAL_ACTIONS.RETURN }),
+        Approval.countDocuments({ approver: auth.sub, action: APPROVAL_ACTIONS.REJECT }),
+        Approval.countDocuments({ approver: auth.sub }),
+      ]);
+
+      return NextResponse.json({
+        role: auth.role,
+        draftCount,
+        pendingCount,
+        returnedCount,
+        approvedCount,
+        rejectedCount,
+        totalCount,
+        pendingMyStep,
+        approvedByMe,
+        returnedByMe,
+        rejectedByMe,
+        reviewedByMe,
+      });
+    }
+
     if (APPROVER_ROLES.includes(auth.role)) {
       const possiblePending = await Requisition.find({
         status: { $in: [REQUISITION_STATUS.PENDING, REQUISITION_STATUS.RETURNED] },
