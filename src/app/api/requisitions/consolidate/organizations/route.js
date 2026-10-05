@@ -230,7 +230,12 @@ export async function GET() {
        * now (not still with HOD, not already past them).
        */
       if (isPostApprovalConsolidator) {
-        if (requisition.status === REQUISITION_STATUS.APPROVED) return true;
+        if (requisition.status === REQUISITION_STATUS.APPROVED) {
+          // Only Procurement-accepted requisitions are eligible for the
+          // final hand-off consolidation. Legacy processing/completed
+          // records are deliberately excluded from the new boundary.
+          return ["ready", "accepted"].includes(requisition.procurementStatus);
+        }
 
         if (auth.role === ROLES.PROCUREMENT) {
           const step = requisition.approvalChain?.[requisition.currentStepIndex];
