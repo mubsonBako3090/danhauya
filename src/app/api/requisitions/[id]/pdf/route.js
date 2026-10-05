@@ -13,6 +13,7 @@ import Requisition from "@/models/Requisition";
 import "@/models/User";
 
 import { generateRequisitionPDF } from "@/lib/pdf";
+import { ROLES } from "@/constants/roles";
 import { generateBOQPDF } from "@/lib/boq";
 
 /*
@@ -118,6 +119,9 @@ export async function GET(request, { params }) {
       requisitionId
     )
       .populate("requester", "fullName")
+      .populate("consolidatedBy", "fullName role")
+      .populate("sourceRequisitions", "requisitionNumber requester status procurementStatus")
+      .populate("originalInitiators.requester", "fullName role")
       .lean();
 
     /*
@@ -141,9 +145,34 @@ export async function GET(request, { params }) {
      * --------------------------------------------------
      */
     const type = new URL(request.url).searchParams.get("type");
+
+    if (type === "procurement") {
+      if (![ROLES.PROCUREMENT, ROLES.ADMIN].includes(auth.role)) {
+        return NextResponse.json(
+          { success: false, message: "Only Procurement staff can download the Procurement hand-off document." },
+          { status: 403 }
+        );
+      }
+
+      if (
+        !requisition.isConsolidated ||
+        requisition.status !== "approved" ||
+        requisition.procurementStatus !== "accepted"
+      ) {
+        return NextResponse.json(
+          { success: false, message: "This requisition is not an accepted Procurement consolidation." },
+          { status: 400 }
+        );
+      }
+    }
+
     const pdfBuffer = type === "boq"
       ? await generateBOQPDF(requisition, requisition.requester)
-      : await generateRequisitionPDF(requisition, requisition.requester);
+      : await generateRequisitionPDF(
+          requisition,
+          requisition.requester,
+          type === "procurement" ? "procurement" : "standard"
+        );
 
     /*
      * --------------------------------------------------
@@ -171,6 +200,8 @@ export async function GET(request, { params }) {
 
     const downloadName = type === "boq"
       ? `${safeFileName}_BOQ.pdf`
+      : type === "procurement"
+      ? `${safeFileName}_Procurement_Handoff.pdf`
       : `${safeFileName}.pdf`;
 
     /*
