@@ -9,6 +9,7 @@ import Approval from "@/models/Approval";
 import User from "@/models/User";
 import { REQUISITION_STATUS, APPROVAL_ACTIONS } from "@/constants/requisitionOptions";
 import { ROLES, APPROVER_ROLES } from "@/constants/roles";
+import { PROCUREMENT_POSITIONS } from "@/constants/procurement";
 
 function getAuth() {
   const token = cookies().get("token")?.value;
@@ -58,55 +59,99 @@ export async function GET() {
     }
 
     if (auth.role === ROLES.PROCUREMENT) {
-      // Procurement has two distinct appearances in the workflow:
-      // 1. Market Survey before VC approval.
-      // 2. Processing after VC approval.
+      const supervisory = [
+        PROCUREMENT_POSITIONS.DIRECTOR,
+        PROCUREMENT_POSITIONS.PRINCIPAL_SENIOR,
+      ].includes(auth.procurementPosition);
+      const isDirector = auth.procurementPosition === PROCUREMENT_POSITIONS.DIRECTOR;
+
+      // Procurement queues are intentionally separated by stage. The dashboard
+      // does not expose the old Start/Complete Processing workflow as a primary
+      // queue; accepted requisitions are the hand-off point for the next
+      // procurement process outside this system.
       const possible = await Requisition.find({
-        status: { $in: [REQUISITION_STATUS.PENDING, REQUISITION_STATUS.RETURNED, REQUISITION_STATUS.APPROVED] },
+        status: {
+          $in: [REQUISITION_STATUS.PENDING, REQUISITION_STATUS.RETURNED, REQUISITION_STATUS.APPROVED],
+        },
         awaitingRequesterAction: { $ne: true },
-        "approvalChain.approver": auth.sub,
-      }).select("_id currentStepIndex approvalChain status procurementStatus procurementOfficer").lean();
+        consolidatedInto: { $exists: false },
+      })
+        .select("_id currentStepIndex approvalChain status procurementStatus procurementOfficer isConsolidated")
+        .lean();
 
       let marketSurveyCount = 0;
-      let processingCount = 0;
-      let readyForProcurement = 0;
-      let completedCount = 0;
+      let directorReviewCount = 0;
       let awaitingVcCount = 0;
+      let acceptedCount = 0;
+      let acceptedConsolidatedCount = 0;
+      let rejectedCount = 0;
 
       for (const requisition of possible) {
         const step = requisition.approvalChain?.[requisition.currentStepIndex];
         const assignedToMe = String(requisition.procurementOfficer || "") === String(auth.sub);
         const stepAssignedToMe = step && String(step.approver) === String(auth.sub);
 
-        if (stepAssignedToMe && step.type === "procurement_review" && requisition.status === REQUISITION_STATUS.PENDING) {
+        if (
+          requisition.status === REQUISITION_STATUS.PENDING &&
+          requisition.procurementStatus === "review" &&
+          step?.type === "procurement_review" &&
+          (supervisory || stepAssignedToMe || assignedToMe)
+        ) {
           marketSurveyCount += 1;
         }
 
-        if (assignedToMe && requisition.procurementStatus === "submitted_to_vc") {
+        if (
+          isDirector &&
+          requisition.status === REQUISITION_STATUS.PENDING &&
+          requisition.procurementStatus === "director_review" &&
+          step?.type === "procurement_review" &&
+          stepAssignedToMe
+        ) {
+          directorReviewCount += 1;
+        }
+
+        if (
+          requisition.status === REQUISITION_STATUS.PENDING &&
+          requisition.procurementStatus === "submitted_to_vc" &&
+          (supervisory || assignedToMe)
+        ) {
           awaitingVcCount += 1;
         }
 
-        if (assignedToMe && requisition.status === REQUISITION_STATUS.APPROVED && requisition.procurementStatus === "ready") {
-          readyForProcurement += 1;
-        }
-
-        if (assignedToMe && requisition.status === REQUISITION_STATUS.APPROVED && requisition.procurementStatus === "processing") {
-          processingCount += 1;
-        }
-
-        if (assignedToMe && requisition.status === REQUISITION_STATUS.APPROVED && requisition.procurementStatus === "completed") {
-          completedCount += 1;
+        // V7.12: accepted is the Procurement hand-off point. The query excludes
+        // child requisitions already absorbed by a later consolidation so the
+        // same requirement is not counted twice.
+        if (
+          requisition.status === REQUISITION_STATUS.APPROVED &&
+          requisition.procurementStatus === "accepted"
+        ) {
+          acceptedCount += 1;
+          if (requisition.isConsolidated) acceptedConsolidatedCount += 1;
         }
       }
+
+      rejectedCount = await Requisition.countDocuments({
+        status: REQUISITION_STATUS.REJECTED,
+        consolidatedInto: { $exists: false },
+        $or: [
+          { procurementStatus: "rejected" },
+          { "approvalChain.role": ROLES.PROCUREMENT },
+        ],
+      });
 
       return NextResponse.json({
         role: auth.role,
         marketSurveyCount,
+        directorReviewCount,
         awaitingVcCount,
-        readyForProcurement,
-        processingCount,
-        completedCount,
-        totalProcurementItems: readyForProcurement + processingCount + completedCount,
+        acceptedCount,
+        acceptedConsolidatedCount,
+        rejectedCount,
+        totalProcurementItems:
+          marketSurveyCount +
+          directorReviewCount +
+          awaitingVcCount +
+          acceptedCount,
       });
     }
 
