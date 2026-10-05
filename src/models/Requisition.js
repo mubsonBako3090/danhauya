@@ -528,6 +528,7 @@ requestingUnits: [
         "director_review",
         "submitted_to_vc",
         "ready",
+        "accepted",
         "processing",
         "completed",
         "rejected",
