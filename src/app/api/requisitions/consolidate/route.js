@@ -281,7 +281,28 @@ export async function POST(request) {
       return (
         requisition.status === REQUISITION_STATUS.PENDING &&
         step?.role === ROLES.PROCUREMENT &&
-        step?.type === "procurement_review"
+        step?.type === "procurement_review" &&
+        requisition.procurementStatus === "review"
+      );
+    });
+
+    // After the assigned officer completes a market survey, the
+    // Procurement Director can consolidate those surveyed requisitions
+    // before sending the resulting representative to the VC.
+    const marketSurveyedSources = sourceRequisitions.filter((requisition) => {
+      const step = requisition.approvalChain?.[requisition.currentStepIndex];
+      const allItemsSurveyed = Array.isArray(requisition.items) &&
+        requisition.items.length > 0 &&
+        requisition.items.every(
+          (item) => item.procurementUnitCost !== undefined && item.procurementUnitCost !== null
+        );
+
+      return (
+        requisition.status === REQUISITION_STATUS.PENDING &&
+        step?.role === ROLES.PROCUREMENT &&
+        step?.type === "procurement_review" &&
+        requisition.procurementStatus === "director_review" &&
+        allItemsSurveyed
       );
     });
 
@@ -295,11 +316,27 @@ export async function POST(request) {
         (requisition) => requisition.status === REQUISITION_STATUS.APPROVED
       );
 
-      if (procurementIntakeSources.length > 0 && approvedSources.length > 0) {
+      if (
+        (procurementIntakeSources.length > 0 || marketSurveyedSources.length > 0) &&
+        approvedSources.length > 0
+      ) {
         return NextResponse.json(
           {
             message:
-              "Select either Procurement intake requisitions or already-approved requisitions, not both in the same consolidation.",
+              "Select requisitions from the same Procurement stage. Do not mix Procurement intake, market-surveyed, and already-accepted requisitions in one consolidation.",
+          },
+          { status: 400 }
+        );
+      }
+
+      if (
+        procurementIntakeSources.length > 0 &&
+        marketSurveyedSources.length > 0
+      ) {
+        return NextResponse.json(
+          {
+            message:
+              "Do not mix Procurement intake requisitions with market-surveyed requisitions. Complete the market survey first, then consolidate the surveyed requisitions for the Director's VC submission.",
           },
           { status: 400 }
         );
@@ -322,6 +359,16 @@ export async function POST(request) {
             { status: 403 }
           );
         }
+      }
+
+      if (marketSurveyedSources.length > 0 && auth.procurementPosition !== "director") {
+        return NextResponse.json(
+          {
+            message:
+              "Only the Procurement Director can consolidate market-surveyed requisitions for VC review.",
+          },
+          { status: 403 }
+        );
       }
     }
 
@@ -534,9 +581,16 @@ export async function POST(request) {
       auth.role === ROLES.PROCUREMENT &&
       procurementIntakeSources.length === sourceRequisitions.length;
 
+    const isMarketSurveyedProcurementConsolidation =
+      auth.role === ROLES.PROCUREMENT &&
+      auth.procurementPosition === "director" &&
+      marketSurveyedSources.length === sourceRequisitions.length;
+
     const isFinalizedOutcome =
       auth.role === ROLES.VC ||
-      (isPostApprovalConsolidator && !isProcurementIntakeConsolidation);
+      (isPostApprovalConsolidator &&
+        !isProcurementIntakeConsolidation &&
+        !isMarketSurveyedProcurementConsolidation);
 
     let procurementOfficer = null;
 
@@ -572,13 +626,17 @@ export async function POST(request) {
       auth.role === ROLES.PROCUREMENT &&
       acceptedProcurementSources.length === sourceRequisitions.length;
 
-    const intakeSourceChain = isProcurementIntakeConsolidation
-      ? sourceRequisitions[0]?.approvalChain || []
-      : [];
+    const intakeSourceChain =
+      (isProcurementIntakeConsolidation || isMarketSurveyedProcurementConsolidation)
+        ? sourceRequisitions[0]?.approvalChain || []
+        : [];
     const sourceVcStep = intakeSourceChain.find(
       (step) => step.role === ROLES.VC && step.type === "approval"
     );
-    if (isProcurementIntakeConsolidation && !sourceVcStep) {
+    if (
+      (isProcurementIntakeConsolidation || isMarketSurveyedProcurementConsolidation) &&
+      !sourceVcStep
+    ) {
       return NextResponse.json(
         {
           message: "The selected Procurement intake requisitions do not have a valid VC approval step.",
@@ -587,21 +645,21 @@ export async function POST(request) {
       );
     }
 
-    const procurementIntakeStep = isProcurementIntakeConsolidation
-      ? {
-          role: ROLES.PROCUREMENT,
-          approver: auth.sub,
-          type: "procurement_review",
-        }
-      : null;
-
+    const procurementReviewStep =
+      isProcurementIntakeConsolidation || isMarketSurveyedProcurementConsolidation
+        ? {
+            role: ROLES.PROCUREMENT,
+            approver: auth.sub,
+            type: "procurement_review",
+          }
+        : null;
 
     const outcomeFields = isProcurementIntakeConsolidation
       ? {
           status: REQUISITION_STATUS.PENDING,
           currentStepIndex: 0,
           approvalChain: [
-            procurementIntakeStep,
+            procurementReviewStep,
             {
               role: ROLES.VC,
               approver: sourceVcStep.approver,
@@ -612,6 +670,24 @@ export async function POST(request) {
           procurementOfficer: auth.sub,
           procurementAssignedBy: auth.sub,
           procurementReceivedAt: now,
+        }
+      : isMarketSurveyedProcurementConsolidation
+      ? {
+          status: REQUISITION_STATUS.PENDING,
+          currentStepIndex: 0,
+          approvalChain: [
+            procurementReviewStep,
+            {
+              role: ROLES.VC,
+              approver: sourceVcStep.approver,
+              type: "approval",
+            },
+          ],
+          procurementStatus: "director_review",
+          procurementOfficer: auth.sub,
+          procurementAssignedBy: auth.sub,
+          procurementReceivedAt: now,
+          procurementReviewStartedAt: now,
         }
       : isAcceptedProcurementConsolidation
       ? {
