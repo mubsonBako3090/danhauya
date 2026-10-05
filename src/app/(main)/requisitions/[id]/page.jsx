@@ -164,6 +164,22 @@ export default function RequisitionDetailPage() {
             </Button>
           </a>
 
+          {requisition.isConsolidated &&
+            requisition.status === REQUISITION_STATUS.APPROVED &&
+            requisition.procurementStatus === "accepted" &&
+            requisition.consolidatedByRole === ROLES.PROCUREMENT && (
+            <a
+              href={`/api/requisitions/${id}/pdf?type=procurement`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <Button>
+                <i className="bi bi-file-earmark-arrow-down" />{" "}
+                Download Procurement Document
+              </Button>
+            </a>
+          )}
+
           {canEditOrResubmit && (
             <Link
               href={`/requisitions/${id}/edit`}
