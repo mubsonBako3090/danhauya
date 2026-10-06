@@ -188,17 +188,87 @@ export async function approveStep({
       false;
 
     /*
+     * Find Procurement stage.
+     */
+    const procurementStep =
+      requisition.approvalChain.find(
+        (approvalStep) =>
+          approvalStep.role ===
+            ROLES.PROCUREMENT &&
+          approvalStep.type ===
+            "processing"
+      );
+
+    /*
+     * Assign Procurement Officer.
+     */
+    let procurementOfficer = null;
+
+    if (
+      procurementStep?.approver
+    ) {
+      procurementOfficer =
+        await User.findById(
+          procurementStep.approver
+        );
+    }
+
+    /*
+     * If the chain does not contain a
+     * Procurement Officer, find an active one.
+     */
+    if (!procurementOfficer) {
+      procurementOfficer =
+        await User.findOne({
+          role: ROLES.PROCUREMENT,
+          accountStatus: "active",
+        });
+    }
+
+    if (!procurementOfficer) {
+      throw new Error(
+        "No active Procurement Officer is configured."
+      );
+    }
+
+    /*
+     * Move current stage to Procurement.
+     */
+    if (procurementStep) {
+      const procurementIndex =
+        requisition.approvalChain.findIndex(
+          (approvalStep) =>
+            approvalStep.role ===
+              ROLES.PROCUREMENT &&
+            approvalStep.type ===
+              "processing"
+        );
+
+      if (
+        procurementIndex >= 0
+      ) {
+        requisition.currentStepIndex =
+          procurementIndex;
+      }
+    }
+
+    /*
      * --------------------------------------------------
-     * PROCUREMENT ACCEPTANCE
+     * PROCUREMENT STATUS
      * --------------------------------------------------
      *
-     * VC has given final institutional approval. The project boundary
-     * ends here: Procurement may use the accepted requisition as the
-     * hand-off document for the subsequent procurement process, which
-     * is outside this system.
+     * VC has approved.
+     *
+     * Therefore Procurement can now begin.
      */
-    requisition.procurementStatus = "accepted";
-    requisition.procurementReceivedAt = new Date();
+    requisition.procurementStatus =
+      "ready";
+
+    requisition.procurementOfficer =
+      procurementOfficer._id;
+
+    requisition.procurementReceivedAt =
+      new Date();
 
     await requisition.save();
 
@@ -232,8 +302,8 @@ export async function approveStep({
         nextStage:
           ROLES.PROCUREMENT,
 
-        procurementStatus:
-          "accepted",
+        procurementOfficer:
+          procurementOfficer._id,
       },
     });
 
@@ -242,6 +312,14 @@ export async function approveStep({
      */
     await sendRequisitionApprovedEmail(
       requisition.requester,
+      requisition
+    );
+
+    /*
+     * Notify Procurement Officer.
+     */
+    await sendApprovalStepEmail(
+      procurementOfficer,
       requisition
     );
 
@@ -330,7 +408,7 @@ export async function approveStep({
  * source requisition so source tracking never remains stuck at the
  * old approver.
  */
-export async function syncConsolidatedSourcesAfterApproval({
+async function syncConsolidatedSourcesAfterApproval({
   representative,
   approvedStep,
   approverId,
@@ -345,234 +423,78 @@ export async function syncConsolidatedSourcesAfterApproval({
     return;
   }
 
-  const visited = new Set();
+  const sources = await Requisition.find({
+    _id: { $in: representative.sourceRequisitions },
+  });
 
-  async function advanceTree(sourceIds) {
-    const sources = await Requisition.find({
-      _id: { $in: sourceIds },
-    });
+  for (const source of sources) {
+    const sourceStep = source.approvalChain?.[source.currentStepIndex];
 
-    for (const source of sources) {
-      const sourceId = String(source._id);
-      if (visited.has(sourceId)) continue;
-      visited.add(sourceId);
+    // Only mirror the decision when this source is still at the same
+    // authority. This protects against stale/duplicate approval calls.
+    if (
+      !sourceStep ||
+      sourceStep.role !== approvedStep?.role ||
+      sourceStep.type !== approvedStep?.type ||
+      String(sourceStep.approver) !== String(approverId)
+    ) {
+      continue;
+    }
 
-      const sourceStep = source.approvalChain?.[source.currentStepIndex];
+    if (recordApproval) {
+      await Approval.create({
+        requisition: source._id,
+        stepIndex: source.currentStepIndex,
+        role: sourceStep.role,
+        approver: approverId,
+        action: APPROVAL_ACTIONS.APPROVE,
+        comment: comment || `Approved through consolidation ${representative.requisitionNumber || representative._id}.`,
+      });
+    }
 
-      // Capture children before changing this node. Even when this source
-      // has already been advanced by the consolidation endpoint, its own
-      // descendants may still be waiting at the old approval step.
-      const childIds = source.isConsolidated && Array.isArray(source.sourceRequisitions)
-        ? [...source.sourceRequisitions]
-        : [];
+    const nextIndex = source.currentStepIndex + 1;
+    const nextStep = source.approvalChain?.[nextIndex];
 
-      // The representative and its descendants should be at the same
-      // authority when the representative's decision is mirrored. Do not
-      // overwrite a source that has already moved independently, but still
-      // recurse into its children.
-      const matchesApprovedStep =
-        sourceStep &&
-        sourceStep.role === approvedStep?.role &&
-        sourceStep.type === approvedStep?.type &&
-        String(sourceStep.approver) === String(approverId);
+    if (sourceStep.role === ROLES.VC) {
+      const processingIndex = source.approvalChain?.findIndex(
+        (step) => step.role === ROLES.PROCUREMENT && step.type === "processing"
+      );
+      const processingStep =
+        processingIndex >= 0 ? source.approvalChain[processingIndex] : null;
 
-      if (!matchesApprovedStep) {
-        if (childIds.length) await advanceTree(childIds);
-        continue;
-      }
+      source.status = REQUISITION_STATUS.APPROVED;
+      source.finalApprovalAt = new Date();
+      source.decidedAt = new Date();
+      source.awaitingRequesterAction = false;
+      source.currentStepIndex =
+        processingIndex >= 0 ? processingIndex : source.currentStepIndex;
+      source.procurementStatus = "ready";
 
-      if (recordApproval) {
-        await Approval.create({
-          requisition: source._id,
-          stepIndex: source.currentStepIndex,
-          role: sourceStep.role,
-          approver: approverId,
-          action: APPROVAL_ACTIONS.APPROVE,
-          comment:
-            comment ||
-            `Approved through consolidation ${representative.requisitionNumber || representative._id}.`,
-        });
-      }
-
-      const nextIndex = source.currentStepIndex + 1;
-      const nextStep = source.approvalChain?.[nextIndex];
-
-      if (sourceStep.role === ROLES.VC) {
-        source.status = REQUISITION_STATUS.APPROVED;
-        source.finalApprovalAt = new Date();
-        source.decidedAt = new Date();
-        source.awaitingRequesterAction = false;
-        source.procurementStatus = "accepted";
+      if (processingStep?.approver) {
+        source.procurementOfficer = processingStep.approver;
         source.procurementReceivedAt = new Date();
-      } else if (nextStep) {
-        source.currentStepIndex = nextIndex;
-        source.status = REQUISITION_STATUS.PENDING;
-        source.awaitingRequesterAction = false;
       }
-
-      await source.save();
-
-      await AuditLog.create({
-        actor: approverId,
-        action: "requisition.consolidated_source_advanced",
-        entityType: "Requisition",
-        entityId: source._id,
-        details: {
-          representativeRequisition: representative._id,
-          approvedRole: approvedStep?.role,
-          nextStepIndex: source.currentStepIndex,
-          nextStepRole: source.approvalChain?.[source.currentStepIndex]?.role,
-        },
-      });
-
-      // Recursively mirror the same approval into every descendant.
-      if (childIds.length) {
-        await advanceTree(childIds);
-      }
+    } else if (nextStep) {
+      source.currentStepIndex = nextIndex;
+      source.status = REQUISITION_STATUS.PENDING;
+      source.awaitingRequesterAction = false;
     }
-  }
 
-  await advanceTree(representative.sourceRequisitions);
-}
+    await source.save();
 
-/*
- * Mirror a return through a consolidated requisition's entire source tree.
- * The representative is the record on which the real decision happened;
- * descendants receive the corresponding workflow state so their owners do
- * not see a stale approval step.
- */
-async function syncConsolidatedSourcesAfterReturn({
-  representative,
-  returnedStep,
-  approverId,
-  comment,
-}) {
-  if (
-    !representative?.isConsolidated ||
-    !Array.isArray(representative.sourceRequisitions) ||
-    representative.sourceRequisitions.length === 0
-  ) return;
-
-  const visited = new Set();
-
-  async function walk(ids) {
-    const sources = await Requisition.find({
-      _id: { $in: ids },
+    await AuditLog.create({
+      actor: approverId,
+      action: "requisition.consolidated_source_advanced",
+      entityType: "Requisition",
+      entityId: source._id,
+      details: {
+        representativeRequisition: representative._id,
+        approvedRole: approvedStep?.role,
+        nextStepIndex: source.currentStepIndex,
+        nextStepRole: source.approvalChain?.[source.currentStepIndex]?.role,
+      },
     });
-
-    for (const source of sources) {
-      const sourceId = String(source._id);
-      if (visited.has(sourceId)) continue;
-      visited.add(sourceId);
-
-      const sourceStep = source.approvalChain?.[source.currentStepIndex];
-      if (
-        !sourceStep ||
-        sourceStep.role !== returnedStep?.role ||
-        sourceStep.type !== returnedStep?.type ||
-        String(sourceStep.approver) !== String(approverId)
-      ) continue;
-
-      const childIds = source.isConsolidated && Array.isArray(source.sourceRequisitions)
-        ? [...source.sourceRequisitions]
-        : [];
-
-      if (source.currentStepIndex === 0) {
-        source.awaitingRequesterAction = true;
-      } else {
-        source.currentStepIndex -= 1;
-        source.awaitingRequesterAction = false;
-      }
-
-      source.status = REQUISITION_STATUS.RETURNED;
-      source.procurementStatus = undefined;
-      source.procurementOfficer = undefined;
-      source.procurementReceivedAt = undefined;
-      source.procurementStartedAt = undefined;
-      source.procurementCompletedAt = undefined;
-      source.comments.push({
-        author: approverId,
-        message: `Returned through consolidated requisition ${representative.requisitionNumber || representative._id}. ${comment || ""}`.trim(),
-      });
-
-      await source.save();
-
-      await AuditLog.create({
-        actor: approverId,
-        action: "requisition.consolidated_source_returned",
-        entityType: "Requisition",
-        entityId: source._id,
-        details: {
-          representativeRequisition: representative._id,
-          comment,
-        },
-      });
-
-      if (childIds.length) await walk(childIds);
-    }
   }
-
-  await walk(representative.sourceRequisitions);
-}
-
-/*
- * Mirror a non-final rejection (the UI calls this "Reject — Allow
- * Resubmission") through the entire consolidation tree.
- */
-async function syncConsolidatedSourcesAfterNonFinalRejection({
-  representative,
-  approverId,
-  comment,
-}) {
-  if (
-    !representative?.isConsolidated ||
-    !Array.isArray(representative.sourceRequisitions) ||
-    representative.sourceRequisitions.length === 0
-  ) return;
-
-  const visited = new Set();
-
-  async function walk(ids) {
-    const sources = await Requisition.find({ _id: { $in: ids } });
-    for (const source of sources) {
-      const sourceId = String(source._id);
-      if (visited.has(sourceId)) continue;
-      visited.add(sourceId);
-
-      const childIds = source.isConsolidated && Array.isArray(source.sourceRequisitions)
-        ? [...source.sourceRequisitions]
-        : [];
-
-      source.status = REQUISITION_STATUS.RETURNED;
-      source.awaitingRequesterAction = true;
-      source.currentStepIndex = 0;
-      source.procurementStatus = undefined;
-      source.procurementOfficer = undefined;
-      source.procurementReceivedAt = undefined;
-      source.procurementStartedAt = undefined;
-      source.procurementCompletedAt = undefined;
-      source.comments.push({
-        author: approverId,
-        message: `Rejected and returned for resubmission through consolidated requisition ${representative.requisitionNumber || representative._id}. ${comment || ""}`.trim(),
-      });
-
-      await source.save();
-      await AuditLog.create({
-        actor: approverId,
-        action: "requisition.consolidated_source_rejected_for_resubmission",
-        entityType: "Requisition",
-        entityId: source._id,
-        details: {
-          representativeRequisition: representative._id,
-          comment,
-        },
-      });
-
-      if (childIds.length) await walk(childIds);
-    }
-  }
-
-  await walk(representative.sourceRequisitions);
 }
 
 /*
@@ -1133,13 +1055,6 @@ export async function returnStep({
 
   await requisition.save();
 
-  await syncConsolidatedSourcesAfterReturn({
-    representative: requisition,
-    returnedStep: step,
-    approverId: approverUser.id,
-    comment,
-  });
-
   await AuditLog.create({
     actor:
       approverUser.id,
@@ -1241,6 +1156,17 @@ async function propagateFinalRejectionThroughConsolidationTree({
       source.status = REQUISITION_STATUS.REJECTED;
       source.decidedAt = now;
       source.awaitingRequesterAction = false;
+
+      // Preserve the real authority who rejected the representative.
+      // Do not infer the rejecting role from the source's old workflow stage.
+      source.rejectedBy = approverUser.id;
+      source.rejectedByRole = representative.approvalChain?.[representative.currentStepIndex]?.role || "unknown";
+      source.rejectedAt = now;
+      source.rejectionComment = comment || "";
+
+      const rejectingUser = await User.findById(approverUser.id).select("fullName");
+      source.rejectedByName = rejectingUser?.fullName || "Unknown";
+
       source.procurementStatus = "rejected";
       source.procurementOfficer = undefined;
       source.procurementReceivedAt = undefined;
@@ -1385,10 +1311,21 @@ export async function rejectStep({
   requisition.procurementCompletedAt =
     undefined;
 
-  if (isFinal && (requisition.isConsolidated || step.role === ROLES.VC || requisition.procurementStatus)) {
-    // Keep any requisition that reached the Procurement/VC phase visible
-    // in Procurement history after a final rejection.
-    requisition.procurementStatus = "rejected";
+  if (isFinal) {
+    const rejectingUser = await User.findById(approverUser.id).select("fullName");
+
+    requisition.rejectedBy = approverUser.id;
+    requisition.rejectedByRole = step.role;
+    requisition.rejectedByName = rejectingUser?.fullName || "Unknown";
+    requisition.rejectedAt = new Date();
+    requisition.rejectionComment = comment || "";
+
+    if (requisition.isConsolidated) {
+      // Keep the representative in Procurement history after a final VC
+      // rejection so authorized Procurement users can still see the outcome.
+      // This is a workflow visibility flag, not the identity of the rejector.
+      requisition.procurementStatus = "rejected";
+    }
   }
 
   if (comment) {
@@ -1402,14 +1339,6 @@ export async function rejectStep({
   }
 
   await requisition.save();
-
-  if (!isFinal && requisition.isConsolidated) {
-    await syncConsolidatedSourcesAfterNonFinalRejection({
-      representative: requisition,
-      approverId: approverUser.id,
-      comment,
-    });
-  }
 
   if (isFinal && requisition.isConsolidated) {
     await propagateFinalRejectionThroughConsolidationTree({
