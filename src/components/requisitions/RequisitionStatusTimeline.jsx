@@ -230,6 +230,24 @@ export default function RequisitionStatusTimeline({
           APPROVAL PROGRESS
         </h3>
 
+        {requisition.status === "rejected" && (
+          <div className={styles.content}>
+            <div className={styles.role}>
+              Final Rejection
+            </div>
+            <div className={styles.person}>
+              {requisition.rejectedByName ||
+                "Decision maker not recorded"}
+            </div>
+            <div className={styles.status}>
+              Rejected by {roleLabel(requisition.rejectedByRole)}
+              {requisition.rejectedAt
+                ? ` on ${new Date(requisition.rejectedAt).toLocaleString()}`
+                : ""}
+            </div>
+          </div>
+        )}
+
         <div className={styles.timeline}>
           {approvalSteps.map((step) => {
             /*
@@ -294,6 +312,7 @@ export default function RequisitionStatusTimeline({
           PROCUREMENT PROCESSING
       ================================================== */}
 
+      {requisition.status !== "rejected" && (
       <section className={styles.section}>
         <h3 className={styles.heading}>
           PROCUREMENT PROCESSING
@@ -328,6 +347,7 @@ export default function RequisitionStatusTimeline({
           </div>
         </div>
       </section>
+      )}
     </div>
   );
 }
