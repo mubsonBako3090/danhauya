@@ -55,7 +55,7 @@ export default function AuditTrailPage() {
   return (
     <div className={styles.wrapper}>
       <h1 className={styles.heading}>Audit Trail</h1>
-      <p className={styles.subheading}>Every status change, login, and edit across the system.</p>
+      <p className={styles.subheading}>Detailed system activity for administrators. Use the filters below to investigate users, requisitions, approvals, and other recorded actions.</p>
 
       <div className={styles.filters}>
         <SelectField
