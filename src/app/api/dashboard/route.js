@@ -7,6 +7,7 @@ import { connectDB } from "@/lib/db";
 import Requisition from "@/models/Requisition";
 import Approval from "@/models/Approval";
 import User from "@/models/User";
+import AuditLog from "@/models/AuditLog";
 import { REQUISITION_STATUS, APPROVAL_ACTIONS } from "@/constants/requisitionOptions";
 import { ROLES, APPROVER_ROLES } from "@/constants/roles";
 import { PROCUREMENT_POSITIONS } from "@/constants/procurement";
@@ -150,6 +151,124 @@ export async function GET() {
       });
     }
 
+    if (auth.role === ROLES.PROVOST) {
+      const scopeUnits = {
+        $or: [
+          { collegeId: auth.collegeId },
+          { requestingUnits: { $elemMatch: { collegeId: auth.collegeId } } },
+        ],
+      };
+
+      const possiblePending = await Requisition.find({
+        status: { $in: [REQUISITION_STATUS.PENDING, REQUISITION_STATUS.RETURNED] },
+        awaitingRequesterAction: { $ne: true },
+        "approvalChain.approver": auth.sub,
+        ...scopeUnits,
+      }).select("_id currentStepIndex approvalChain status awaitingRequesterAction").lean();
+
+      const pendingMyStep = possiblePending.filter((requisition) => {
+        const currentStep = requisition.approvalChain?.[requisition.currentStepIndex];
+        return currentStep && String(currentStep.approver) === String(auth.sub) && currentStep.type === "approval";
+      }).length;
+
+      const consolidationCandidates = await Requisition.find({
+        status: { $in: [REQUISITION_STATUS.PENDING, REQUISITION_STATUS.RETURNED] },
+        awaitingRequesterAction: { $ne: true },
+        consolidatedInto: { $exists: false },
+        ...scopeUnits,
+        "approvalChain.approver": auth.sub,
+      }).select("currentStepIndex approvalChain").lean();
+
+      const readyForConsolidation = consolidationCandidates.filter((requisition) => {
+        const currentStep = requisition.approvalChain?.[requisition.currentStepIndex];
+        return currentStep && currentStep.type === "approval" && String(currentStep.approver) === String(auth.sub);
+      }).length;
+
+      const [returnedInScope, approvedInScope, rejectedInScope, myConsolidations, approvedByMe, returnedByMe, rejectedByMe, reviewedByMe] = await Promise.all([
+        Requisition.countDocuments({ ...scopeUnits, status: REQUISITION_STATUS.RETURNED }),
+        Requisition.countDocuments({ ...scopeUnits, status: REQUISITION_STATUS.APPROVED }),
+        Requisition.countDocuments({ ...scopeUnits, status: REQUISITION_STATUS.REJECTED }),
+        Requisition.countDocuments({ isConsolidated: true, consolidatedBy: auth.sub }),
+        Approval.countDocuments({ approver: auth.sub, action: APPROVAL_ACTIONS.APPROVE }),
+        Approval.countDocuments({ approver: auth.sub, action: APPROVAL_ACTIONS.RETURN }),
+        Approval.countDocuments({ approver: auth.sub, action: APPROVAL_ACTIONS.REJECT }),
+        Approval.countDocuments({ approver: auth.sub }),
+      ]);
+
+      return NextResponse.json({
+        role: auth.role,
+        pendingMyStep,
+        readyForConsolidation,
+        myConsolidations,
+        returnedInScope,
+        approvedInScope,
+        rejectedInScope,
+        approvedByMe,
+        returnedByMe,
+        rejectedByMe,
+        reviewedByMe,
+      });
+    }
+
+    if (auth.role === ROLES.VC) {
+      const possiblePending = await Requisition.find({
+        status: { $in: [REQUISITION_STATUS.PENDING, REQUISITION_STATUS.RETURNED] },
+        awaitingRequesterAction: { $ne: true },
+        "approvalChain.approver": auth.sub,
+      })
+        .select("_id currentStepIndex approvalChain status procurementStatus isConsolidated")
+        .lean();
+
+      let pendingMyStep = 0;
+      let procurementAwaitingVc = 0;
+      let normalAwaitingApproval = 0;
+
+      for (const requisition of possiblePending) {
+        const currentStep = requisition.approvalChain?.[requisition.currentStepIndex];
+        const isMyCurrentApproval =
+          currentStep &&
+          String(currentStep.approver) === String(auth.sub) &&
+          currentStep.type === "approval";
+
+        if (!isMyCurrentApproval) continue;
+
+        pendingMyStep += 1;
+
+        if (requisition.procurementStatus === "submitted_to_vc") {
+          procurementAwaitingVc += 1;
+        } else {
+          normalAwaitingApproval += 1;
+        }
+      }
+
+      const [approvedByMe, returnedByMe, rejectedByMe, reviewedByMe] = await Promise.all([
+        Approval.countDocuments({ approver: auth.sub, action: APPROVAL_ACTIONS.APPROVE }),
+        Approval.countDocuments({ approver: auth.sub, action: APPROVAL_ACTIONS.RETURN }),
+        Approval.countDocuments({ approver: auth.sub, action: APPROVAL_ACTIONS.REJECT }),
+        Approval.countDocuments({ approver: auth.sub }),
+      ]);
+
+      const [approvedCount, returnedCount, rejectedCount] = await Promise.all([
+        Requisition.countDocuments({ status: REQUISITION_STATUS.APPROVED, "approvalChain.approver": auth.sub }),
+        Requisition.countDocuments({ status: REQUISITION_STATUS.RETURNED, "approvalChain.approver": auth.sub }),
+        Requisition.countDocuments({ status: REQUISITION_STATUS.REJECTED, "approvalChain.approver": auth.sub }),
+      ]);
+
+      return NextResponse.json({
+        role: auth.role,
+        pendingMyStep,
+        normalAwaitingApproval,
+        procurementAwaitingVc,
+        approvedByMe,
+        returnedByMe,
+        rejectedByMe,
+        reviewedByMe,
+        approvedCount,
+        returnedCount,
+        rejectedCount,
+      });
+    }
+
     if (APPROVER_ROLES.includes(auth.role)) {
       const possiblePending = await Requisition.find({
         status: { $in: [REQUISITION_STATUS.PENDING, REQUISITION_STATUS.RETURNED] },
@@ -270,7 +389,8 @@ export async function GET() {
     }
 
     if (auth.role === ROLES.ADMIN) {
-      const [totalUsers, pendingUsers, activeUsers, deactivatedUsers, totalRequisitions, activeRequisitions, draftRequisitions, pendingRequisitions, returnedRequisitions, approvedRequisitions, rejectedRequisitions] = await Promise.all([
+      const auditSince = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const [totalUsers, pendingUsers, activeUsers, deactivatedUsers, totalRequisitions, activeRequisitions, draftRequisitions, pendingRequisitions, returnedRequisitions, approvedRequisitions, rejectedRequisitions, auditEvents24h, approvalEvents24h, userEvents24h, requisitionEvents24h] = await Promise.all([
         User.countDocuments(),
         User.countDocuments({ accountStatus: "pending" }),
         User.countDocuments({ accountStatus: "active" }),
@@ -282,8 +402,12 @@ export async function GET() {
         Requisition.countDocuments({ status: REQUISITION_STATUS.RETURNED }),
         Requisition.countDocuments({ status: REQUISITION_STATUS.APPROVED }),
         Requisition.countDocuments({ status: REQUISITION_STATUS.REJECTED }),
+        AuditLog.countDocuments({ createdAt: { $gte: auditSince } }),
+        AuditLog.countDocuments({ createdAt: { $gte: auditSince }, action: { $in: ["requisition.approve", "requisition.return", "requisition.reject"] } }),
+        AuditLog.countDocuments({ createdAt: { $gte: auditSince }, action: { $regex: /^user\./ } }),
+        AuditLog.countDocuments({ createdAt: { $gte: auditSince }, action: { $regex: /^requisition\./ } }),
       ]);
-      return NextResponse.json({ role: auth.role, totalUsers, pendingUsers, activeUsers, deactivatedUsers, totalRequisitions, activeRequisitions, draftRequisitions, pendingRequisitions, returnedRequisitions, approvedRequisitions, rejectedRequisitions });
+      return NextResponse.json({ role: auth.role, totalUsers, pendingUsers, activeUsers, deactivatedUsers, totalRequisitions, activeRequisitions, draftRequisitions, pendingRequisitions, returnedRequisitions, approvedRequisitions, rejectedRequisitions, auditEvents24h, approvalEvents24h, userEvents24h, requisitionEvents24h });
     }
 
     return NextResponse.json({ message: "No dashboard statistics are configured for this role." }, { status: 403 });
