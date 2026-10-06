@@ -14,29 +14,50 @@ export default function AdminDashboard({ user }) {
     axios.get("/api/dashboard").then(({ data }) => setStats(data)).catch(() => {});
   }, []);
 
+  const cards = [
+    ["Total Users", stats?.totalUsers, "bi-people", "primary", "/users"],
+    ["Pending Account Approvals", stats?.pendingUsers, "bi-person-check", "pending", "/users"],
+    ["Active Requisitions", stats?.activeRequisitions, "bi-hourglass-split", "approved", "/requisitions"],
+    ["Rejected Requisitions", stats?.rejectedRequisitions, "bi-x-circle", "rejected", "/requisitions?status=rejected"],
+    ["Audit Events · 24h", stats?.auditEvents24h, "bi-activity", "primary", "/audit-trail"],
+    ["Approval Decisions · 24h", stats?.approvalEvents24h, "bi-check2-square", "approved", "/audit-trail"],
+    ["User Activity · 24h", stats?.userEvents24h, "bi-person-lines-fill", "pending", "/audit-trail"],
+    ["Requisition Activity · 24h", stats?.requisitionEvents24h, "bi-file-earmark-text", "draft", "/audit-trail"],
+  ];
+
   return (
     <div className={styles.wrapper}>
       <div>
         <h1 className={styles.heading}>Welcome, {user.fullName.split(" ")[0]}</h1>
-        <p className={styles.subheading}>System Administrator</p>
+        <p className={styles.subheading}>System Administration &amp; Audit Overview</p>
       </div>
 
       <div className={styles.actions}>
         <Link href="/users">
-          <Button>
-            <i className="bi bi-people" /> Manage Users
-          </Button>
+          <Button><i className="bi bi-people" /> Manage Users</Button>
         </Link>
         <Link href="/audit-trail">
-          <Button variant="secondary">View Audit Trail</Button>
+          <Button variant="secondary"><i className="bi bi-shield-check" /> Open Audit Trail</Button>
         </Link>
       </div>
 
       <div className={styles.statGrid}>
-        <StatCard label="Total Users" value={stats?.totalUsers} icon="bi-people" tone="primary" />
-        <StatCard label="Pending Account Approvals" value={stats?.pendingUsers} icon="bi-person-check" tone="pending" />
-        <StatCard label="Total Requisitions" value={stats?.totalRequisitions} icon="bi-file-earmark-text" tone="draft" />
-        <StatCard label="Active Requisitions" value={stats?.activeRequisitions} icon="bi-hourglass-split" tone="approved" />
+        {cards.map(([label, value, icon, tone, href]) => (
+          <Link href={href} key={label} className={styles.cardLink}>
+            <StatCard label={label} value={value} icon={icon} tone={tone} />
+          </Link>
+        ))}
+      </div>
+
+      <div className={styles.section}>
+        <h2 className={styles.sectionTitle}>System Overview</h2>
+        <p className={styles.subheading}>
+          Monitor users, requisition activity, approvals, and the audit record without changing operational workflows.
+        </p>
+        <div className={styles.actions}>
+          <Link href="/users"><Button variant="secondary">Review Users</Button></Link>
+          <Link href="/audit-trail"><Button variant="secondary">Review Audit Events</Button></Link>
+        </div>
       </div>
     </div>
   );
