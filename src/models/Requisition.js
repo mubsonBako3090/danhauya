@@ -528,7 +528,6 @@ requestingUnits: [
         "director_review",
         "submitted_to_vc",
         "ready",
-        "accepted",
         "processing",
         "completed",
         "rejected",
@@ -629,6 +628,36 @@ requestingUnits: [
 
     decidedAt: {
       type: Date,
+    },
+
+    /*
+     * --------------------------------------------------
+     * FINAL REJECTION TRACEABILITY
+     * --------------------------------------------------
+     *
+     * Keeps the actual authority who rejected the requisition.
+     * This is especially important when a consolidated representative
+     * rejection is propagated to original/source requisitions.
+     */
+    rejectedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+
+    rejectedByRole: {
+      type: String,
+    },
+
+    rejectedByName: {
+      type: String,
+    },
+
+    rejectedAt: {
+      type: Date,
+    },
+
+    rejectionComment: {
+      type: String,
     },
   },
   {
