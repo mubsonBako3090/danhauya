@@ -28,7 +28,14 @@ export default function ApprovalsQueuePage() {
   useEffect(() => {
     setLoading(true);
     axios
-      .get("/api/approvals", { params: { stage } })
+      .get("/api/approvals", {
+        params: {
+          stage,
+          ...(stage === "my-decisions" && decisionAction !== "all"
+            ? { action: decisionAction }
+            : {}),
+        },
+      })
       .then(({ data }) => setRequisitions(data.requisitions || []))
       .catch((err) => toast.error(err.response?.data?.message || "Failed to load queue."))
       .finally(() => setLoading(false));
