@@ -15,10 +15,24 @@
  *
  * HOW TO RUN IT
  *   Visit, from your phone browser, once:
- *     https://<your-app>.vercel.app/api/dev/seed?secret=<SEED_SECRET>&mode=add
- *   Add "&mode=reset" instead of "mode=add" to wipe previous seed data
- *   first (only removes documents tagged seedTag: "ksu-seed-v1" — your
- *   real admin accounts are never touched).
+ *     https://<your-app>.vercel.app/api/auth/dev-seed?secret=<SEED_SECRET>&mode=add
+ *   Modes:
+ *     add                        — seed users + requisitions (fails on
+ *                                  duplicate emails if already seeded)
+ *     reset                      — wipe previous seed data (only docs
+ *                                  tagged seedTag: "ksu-seed-v1"), then
+ *                                  reseed fresh. Never touches real
+ *                                  admin accounts.
+ *     clear-seeded-requisitions  — delete ONLY the seeded test
+ *                                  requisitions (+ their approvals/audit
+ *                                  logs). Does not reseed, does not
+ *                                  touch users or real requisitions.
+ *     clear-all-requisitions     — delete EVERY requisition in the
+ *                                  database, seeded or real (+ all
+ *                                  approvals and requisition audit
+ *                                  logs). Does not reseed, does not
+ *                                  touch users. Destructive — use with
+ *                                  care.
  *
  * AFTER YOU'RE DONE
  *   Delete this file (and the now-empty dev/seed folders) and redeploy,
@@ -71,6 +85,44 @@ export async function GET(request) {
   try {
     await connectDB();
     const db = mongoose.connection.db;
+
+    // ---------------------------------------------------------------
+    // Pure delete modes — these do NOT reseed anything afterward.
+    // ---------------------------------------------------------------
+    if (mode === "clear-seeded-requisitions") {
+      const [reqRes, apprRes, auditRes] = await Promise.all([
+        db.collection("requisitions").deleteMany({ seedTag: SEED_TAG }),
+        db.collection("approvals").deleteMany({ seedTag: SEED_TAG }),
+        db.collection("auditlogs").deleteMany({ seedTag: SEED_TAG, entityType: "Requisition" }),
+      ]);
+      return NextResponse.json({
+        message: "Deleted all seeded (test) requisitions, their approvals, and their audit logs. Seeded users were left untouched.",
+        mode,
+        deleted: {
+          requisitions: reqRes.deletedCount,
+          approvals: apprRes.deletedCount,
+          auditLogs: auditRes.deletedCount,
+        },
+      });
+    }
+
+    if (mode === "clear-all-requisitions") {
+      const [reqRes, apprRes, auditRes] = await Promise.all([
+        db.collection("requisitions").deleteMany({}),
+        db.collection("approvals").deleteMany({}),
+        db.collection("auditlogs").deleteMany({ entityType: "Requisition" }),
+      ]);
+      return NextResponse.json({
+        message:
+          "Deleted EVERY requisition in the database (seeded and real), every approval, and every requisition-related audit log. Users and non-requisition audit logs were left untouched.",
+        mode,
+        deleted: {
+          requisitions: reqRes.deletedCount,
+          approvals: apprRes.deletedCount,
+          auditLogs: auditRes.deletedCount,
+        },
+      });
+    }
 
     if (mode === "reset") {
       await Promise.all([
@@ -366,8 +418,9 @@ export async function GET(request) {
       r.submittedAt = now;
       requisitionDocs.push(r);
       addAudit({ actor: csRequester, action: "requisition.submit", entityId: r._id, details: { toStepIndex: 0 } });
-      }
-        // 3) PENDING — HOD approved, awaiting Dean
+    }
+
+    // 3) PENDING — HOD approved, awaiting Dean
     {
       const r = newRequisition({
         requester: humRequester,
@@ -861,4 +914,4 @@ export async function GET(request) {
   } catch (err) {
     return NextResponse.json({ message: "Seed failed.", error: err.message }, { status: 500 });
   }
-      }
+}
