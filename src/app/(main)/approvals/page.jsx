@@ -96,6 +96,14 @@ export default function ApprovalsQueuePage() {
                 Director Review
               </Link>
             )}
+            {user?.procurementPosition === "director" && stage === "market-survey" && (
+              <Link
+                className={styles.tab}
+                href="/requisitions/consolidate?source=procurement-intake"
+              >
+                <i className="bi bi-layers" /> Consolidate Intake
+              </Link>
+            )}
             <Link
               className={stage === "processing" ? styles.tabActive : styles.tab}
               href="/approvals?stage=processing"
