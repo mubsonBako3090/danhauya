@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import axios from "axios";
 import toast from "react-hot-toast";
 import Button from "@/components/ui/Button";
@@ -28,6 +28,9 @@ function resolveOrgLabels(collegeId, facultyId) {
 
 export default function ConsolidateRequisitionPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const sourceMode = searchParams.get("source");
+  const isProcurementIntakeMode = sourceMode === "procurement-intake";
 
   const [loading, setLoading] = useState(true);
   const [organizations, setOrganizations] = useState([]);
@@ -77,7 +80,33 @@ export default function ConsolidateRequisitionPage() {
         axios.get("/api/requisitions/consolidate/organizations"),
         axios.get("/api/users/me"),
       ]);
-      setOrganizations(data.organizations || []);
+      const loadedOrganizations = data.organizations || [];
+      const scopedOrganizations = isProcurementIntakeMode
+        ? loadedOrganizations
+            .map((college) => ({
+              ...college,
+              faculties: (college.faculties || [])
+                .map((faculty) => ({
+                  ...faculty,
+                  departments: (faculty.departments || [])
+                    .map((department) => ({
+                      ...department,
+                      requisitions: (department.requisitions || []).filter((req) => {
+                        const step = req.approvalChain?.[req.currentStepIndex];
+                        return req.status === "pending" &&
+                          step?.role === ROLES.PROCUREMENT &&
+                          step?.type === "procurement_review" &&
+                          req.procurementStatus !== "director_review";
+                      }),
+                    }))
+                    .filter((department) => department.requisitions.length > 0),
+                }))
+                .filter((faculty) => faculty.departments.length > 0),
+            }))
+            .filter((college) => college.faculties.length > 0)
+        : loadedOrganizations;
+      setOrganizations(scopedOrganizations);
+      setSelectedIds(new Set());
       setUserRole(meData.user?.role || null);
     } catch (err) {
       toast.error(
@@ -86,7 +115,7 @@ export default function ConsolidateRequisitionPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isProcurementIntakeMode]);
 
   useEffect(() => {
     load();
@@ -263,8 +292,21 @@ export default function ConsolidateRequisitionPage() {
   return;
       }
 
-      // VC/Procurement/Admin: already finalized, ready for processing.
-      toast.success("Consolidated requisition created and ready for processing.");
+      // Procurement intake consolidations must be assigned to a market-survey
+      // officer before any survey work starts. Open the approval detail page,
+      // where the existing Procurement Assignment panel is available.
+      if (
+        created.status === "pending" &&
+        created.procurementStatus === "review" &&
+        created.approvalChain?.[created.currentStepIndex]?.type === "procurement_review"
+      ) {
+        toast.success("Intake requisitions consolidated. Assign the consolidated requisition to a Procurement officer.");
+        router.push(`/approvals/${created._id}`);
+        return;
+      }
+
+      // Other outcomes retain their existing behavior.
+      toast.success("Consolidated requisition created and ready for the next step.");
       router.push(`/requisitions/${created._id}`);
     } catch (err) {
       toast.error(err.response?.data?.message || "Failed to create consolidated requisition.");
@@ -283,11 +325,13 @@ export default function ConsolidateRequisitionPage() {
         <div>
           <h1 className={styles.heading}>Consolidate Requisitions</h1>
           <p className={styles.subheading}>
-            {isDraftOutcomeRole
+            {isProcurementIntakeMode
+              ? "Select pending Procurement intake requisitions to combine into one representative. After consolidation, assign that consolidated requisition to a Procurement officer for market survey. Only intake-stage requisitions are shown here."
+              : isDraftOutcomeRole
               ? "Select requisitions currently pending your approval and merge them into one. Consolidating doubles as your approval — you'll get a chance to review before it's sent to the next approver."
               : isPreApprovalRole
               ? "Select requisitions currently pending your approval and merge them into one. Consolidating doubles as your approval and finalizes them for Procurement."
-              : "Select already fully-approved requisitions from the units under your authority and merge them into one for processing."}{" "}
+              : "Select eligible requisitions from the units under your authority and merge them into one for the appropriate Procurement workflow."}{" "}
             Each item keeps its originating department for traceability.
           </p>
         </div>
@@ -297,9 +341,11 @@ export default function ConsolidateRequisitionPage() {
         <p className={styles.hint}>Loading requisitions available for consolidation…</p>
       ) : !hasAnyRequisitions ? (
         <p className={styles.hint}>
-          {isPreApprovalRole
+          {isProcurementIntakeMode
+            ? "No eligible Procurement intake requisitions are available to consolidate."
+            : isPreApprovalRole
             ? "No requisitions are currently pending your approval within your scope."
-            : "No fully-approved requisitions are currently available to consolidate within your scope."}
+            : "No eligible requisitions are currently available to consolidate within your scope."}
         </p>
       ) : (
         <div className={styles.layout}>
