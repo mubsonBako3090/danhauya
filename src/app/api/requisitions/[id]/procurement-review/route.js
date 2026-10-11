@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { verifyToken } from "@/lib/auth";
 import { connectDB } from "@/lib/db";
 import { ROLES } from "@/constants/roles";
+import { createNotifications } from "@/lib/notifications";
 import {
   updateProcurementReview,
   submitProcurementForDirectorReview,
@@ -73,6 +74,23 @@ export async function POST(request, { params }) {
           procurementUser: { id: auth.sub, procurementPosition: auth.procurementPosition },
           comment: body.comment,
         });
+
+    const nextStep = (requisition?.approvalChain || []).find((step) =>
+      auth.procurementPosition === "director"
+        ? step?.role === "vc" && step?.type === "approval"
+        : step?.role === "procurement" && step?.type === "procurement_review" && step?.approver && String(step.approver) !== String(auth.sub)
+    );
+    if (nextStep?.approver) {
+      await createNotifications({
+        recipientIds: [nextStep.approver],
+        title: auth.procurementPosition === "director" ? "Requisition awaiting VC decision" : "Market survey ready for Director review",
+        message: auth.procurementPosition === "director"
+          ? `${requisition?.requisitionNumber || "A requisition"} has been submitted to the VC for a decision.`
+          : `${requisition?.requisitionNumber || "A requisition"} has completed market survey and is ready for Director review.`,
+        type: "info",
+        requisition,
+      });
+    }
 
     return NextResponse.json({ requisition });
   } catch (err) {
