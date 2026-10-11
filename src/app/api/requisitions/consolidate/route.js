@@ -282,7 +282,9 @@ export async function POST(request) {
         requisition.status === REQUISITION_STATUS.PENDING &&
         step?.role === ROLES.PROCUREMENT &&
         step?.type === "procurement_review" &&
-        requisition.procurementStatus === "review"
+        // Treat an unset status as intake only when the active approval step
+        // explicitly places the requisition in Procurement Review.
+        ["review", undefined, null].includes(requisition.procurementStatus)
       );
     });
 
