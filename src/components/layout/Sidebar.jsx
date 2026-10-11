@@ -21,6 +21,7 @@ const NAV_ITEMS = [
     icon: "bi-check2-square",
     roles: [ROLES.HOD, ROLES.DEAN, ROLES.PROVOST, ROLES.VC],
   },
+  { href: "/notifications", label: "Notifications", icon: "bi-bell", roles: "all" },
   { href: "/reports", label: "Reports", icon: "bi-bar-chart", roles: "all" },
   { href: "/audit-trail", label: "Audit Trail", icon: "bi-clock-history", roles: [ROLES.ADMIN] },
   { href: "/users", label: "Manage Users", icon: "bi-people", roles: [ROLES.ADMIN] },
