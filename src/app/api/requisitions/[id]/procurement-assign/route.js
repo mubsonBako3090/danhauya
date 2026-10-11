@@ -5,6 +5,7 @@ import { verifyToken } from "@/lib/auth";
 import { connectDB } from "@/lib/db";
 import { ROLES } from "@/constants/roles";
 import { assignProcurementOfficer } from "@/services/approvalService";
+import { createNotifications } from "@/lib/notifications";
 
 function getAuth() {
   const token = cookies().get("token")?.value;
@@ -30,6 +31,15 @@ export async function POST(request, { params }) {
       assigningUser: { id: auth.sub },
       procurementOfficerId: body.procurementOfficerId,
       note: body.note,
+    });
+
+    const assignedId = requisition?.procurementOfficer || requisition?.procurementAssignedTo || body.procurementOfficerId;
+    await createNotifications({
+      recipientIds: [assignedId],
+      title: "Requisition assigned for market survey",
+      message: `${requisition?.requisitionNumber || "A requisition"} has been assigned to you for Procurement review.`,
+      type: "info",
+      requisition,
     });
 
     return NextResponse.json({ requisition });
