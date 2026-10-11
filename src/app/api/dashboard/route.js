@@ -326,7 +326,8 @@ export async function GET() {
 
         if (
           requisition.status === REQUISITION_STATUS.PENDING &&
-          requisition.procurementStatus === "review" &&
+          ["review", undefined, null].includes(requisition.procurementStatus) &&
+          step?.role === ROLES.PROCUREMENT &&
           step?.type === "procurement_review" &&
           (supervisory || stepAssignedToMe || assignedToMe)
         ) {
@@ -356,7 +357,7 @@ export async function GET() {
         // same requirement is not counted twice.
         if (
           requisition.status === REQUISITION_STATUS.APPROVED &&
-          requisition.procurementStatus === "accepted"
+          ["ready", "accepted"].includes(requisition.procurementStatus)
         ) {
           acceptedCount += 1;
           if (requisition.isConsolidated) acceptedConsolidatedCount += 1;
