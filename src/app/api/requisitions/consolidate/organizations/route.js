@@ -243,7 +243,9 @@ export async function GET() {
             requisition.status === REQUISITION_STATUS.PENDING &&
             step?.role === ROLES.PROCUREMENT &&
             step?.type === "procurement_review" &&
-            requisition.procurementStatus === "review";
+            // Older legitimate intake records may not have had this field
+            // persisted. The current workflow step is the authoritative stage.
+            ["review", undefined, null].includes(requisition.procurementStatus);
 
           const isMarketSurveyedForDirector =
             requisition.status === REQUISITION_STATUS.PENDING &&
