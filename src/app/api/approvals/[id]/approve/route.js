@@ -11,6 +11,7 @@ import {
 import {
   approveStep,
 } from "@/services/approvalService";
+import { createNotifications, getRequisitionInitiatorIds } from "@/lib/notifications";
 
 function getAuth() {
   const token =
@@ -77,6 +78,37 @@ export async function POST(
         comment:
           value.comment,
       });
+
+    if (requisition?.status === "approved") {
+      const initiators = getRequisitionInitiatorIds(requisition);
+      await createNotifications({
+        recipientIds: initiators,
+        title: "Requisition approved",
+        message: `${requisition.requisitionNumber || "Your requisition"} has received final approval.`,
+        type: "success",
+        requisition,
+      });
+      if (requisition.procurementOfficer) {
+        await createNotifications({
+          recipientIds: [requisition.procurementOfficer],
+          title: "Requisition ready for Procurement",
+          message: `${requisition.requisitionNumber || "A requisition"} has been approved and is ready for the next Procurement stage.`,
+          type: "info",
+          requisition,
+        });
+      }
+    } else {
+      const nextStep = requisition?.approvalChain?.[requisition?.currentStepIndex];
+      if (nextStep?.approver) {
+        await createNotifications({
+          recipientIds: [nextStep.approver],
+          title: "Requisition awaiting your review",
+          message: `${requisition.requisitionNumber || "A requisition"} has moved to your approval queue.`,
+          type: "info",
+          requisition,
+        });
+      }
+    }
 
     return NextResponse.json({
       requisition,
