@@ -14,6 +14,7 @@ import {
 import {
   submitRequisition,
 } from "@/services/requisitionService";
+import { createNotifications } from "@/lib/notifications";
 
 function getAuth() {
   const token =
@@ -158,6 +159,17 @@ const {
             requesterUser.department,
         },
       });
+
+    const nextStep = requisition?.approvalChain?.[requisition?.currentStepIndex || 0];
+    if (nextStep?.approver) {
+      await createNotifications({
+        recipientIds: [nextStep.approver],
+        title: "Requisition awaiting your review",
+        message: `${requisition.requisitionNumber || "A requisition"} has been submitted and is awaiting your decision.`,
+        type: "info",
+        requisition,
+      });
+    }
 
     return NextResponse.json({
       requisition,
