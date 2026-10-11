@@ -11,6 +11,7 @@ import {
 import {
   returnStep,
 } from "@/services/approvalService";
+import { createNotifications, getRequisitionInitiatorIds } from "@/lib/notifications";
 
 function getAuth() {
   const token =
@@ -92,6 +93,27 @@ export async function POST(
         comment:
           value.comment.trim(),
       });
+
+    if (requisition?.awaitingRequesterAction) {
+      await createNotifications({
+        recipientIds: getRequisitionInitiatorIds(requisition),
+        title: "Requisition returned for clarification",
+        message: `${requisition.requisitionNumber || "Your requisition"} was returned. Please review the comments and make the required changes.`,
+        type: "warning",
+        requisition,
+      });
+    } else {
+      const previousStep = requisition?.approvalChain?.[requisition?.currentStepIndex];
+      if (previousStep?.approver) {
+        await createNotifications({
+          recipientIds: [previousStep.approver],
+          title: "Requisition returned to your queue",
+          message: `${requisition.requisitionNumber || "A requisition"} was returned to your approval step for follow-up.`,
+          type: "warning",
+          requisition,
+        });
+      }
+    }
 
     return NextResponse.json({
       requisition,
