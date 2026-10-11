@@ -11,6 +11,7 @@ import {
 import {
   rejectStep,
 } from "@/services/approvalService";
+import { createNotifications, getRequisitionInitiatorIds } from "@/lib/notifications";
 
 function getAuth() {
   const token =
@@ -80,6 +81,17 @@ export async function POST(
         isFinal:
           value.isFinal,
       });
+
+    const isFinalRejection = requisition?.status === "rejected";
+    await createNotifications({
+      recipientIds: getRequisitionInitiatorIds(requisition),
+      title: isFinalRejection ? "Requisition rejected" : "Requisition returned for revision",
+      message: isFinalRejection
+        ? `${requisition.requisitionNumber || "Your requisition"} was rejected. Review the decision comments for details.`
+        : `${requisition.requisitionNumber || "Your requisition"} was returned for revision. Review the comments and make the required changes.`,
+      type: isFinalRejection ? "error" : "warning",
+      requisition,
+    });
 
     return NextResponse.json({
       requisition,
