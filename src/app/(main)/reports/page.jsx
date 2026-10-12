@@ -105,7 +105,7 @@ export default function ReportsPage() {
           <div className={styles.panelsGrid}>
             <section className={styles.panel}>
               <h4 className={styles.panelTitle}>By Status</h4>
-              {report.byStatus.map((s) => (
+              {report.byStatus.length ? report.byStatus.map((s) => (
                 <BreakdownBar
                   key={s._id}
                   label={REQUISITION_STATUS_LABELS[s._id] || s._id}
@@ -113,28 +113,41 @@ export default function ReportsPage() {
                   totalCost={s.totalCost}
                   maxCount={Math.max(...report.byStatus.map((x) => x.count), 1)}
                 />
-              ))}
+              )) : <p className={styles.empty}>No requisitions match these filters.</p>}
             </section>
 
             <section className={styles.panel}>
               <h4 className={styles.panelTitle}>By College</h4>
-              {report.byCollege.map((c) => (
+              {report.byCollege.length ? report.byCollege.map((c) => (
                 <BreakdownBar key={c._id} label={c.name} count={c.count} totalCost={c.totalCost} maxCount={maxCollegeCount} />
-              ))}
+              )) : <p className={styles.empty}>No college data available.</p>}
             </section>
 
             <section className={styles.panel}>
               <h4 className={styles.panelTitle}>By Department</h4>
-              {report.byDepartment.map((d) => (
-                <BreakdownBar key={d._id} label={d._id} count={d.count} totalCost={d.totalCost} maxCount={maxDeptCount} />
-              ))}
+              {report.byDepartment.length ? report.byDepartment.map((d) => (
+                <BreakdownBar key={`${d.collegeId || "unknown"}-${d._id}`} label={d._id} count={d.count} totalCost={d.totalCost} maxCount={maxDeptCount} />
+              )) : <p className={styles.empty}>No department data available.</p>}
             </section>
 
             <section className={styles.panel}>
               <h4 className={styles.panelTitle}>By Category</h4>
-              {report.byCategory.map((c) => (
+              {report.byCategory.length ? report.byCategory.map((c) => (
                 <BreakdownBar key={c._id} label={c._id || "Uncategorized"} count={c.count} totalCost={c.totalCost} maxCount={maxCategoryCount} />
-              ))}
+              )) : <p className={styles.empty}>No category data available.</p>}
+            </section>
+
+            <section className={styles.panel}>
+              <h4 className={styles.panelTitle}>By Procurement Stage</h4>
+              {report.byProcurementStatus?.length ? report.byProcurementStatus.map((stage) => (
+                <BreakdownBar
+                  key={stage._id}
+                  label={stage._id.replaceAll("_", " ")}
+                  count={stage.count}
+                  totalCost={stage.totalCost}
+                  maxCount={Math.max(...report.byProcurementStatus.map((item) => item.count), 1)}
+                />
+              )) : <p className={styles.empty}>No procurement-stage data available.</p>}
             </section>
           </div>
         </>
