@@ -5,6 +5,8 @@ import mongoose from "mongoose";
 import { verifyToken } from "@/lib/auth";
 import { connectDB } from "@/lib/db";
 import Requisition from "@/models/Requisition";
+import Approval from "@/models/Approval";
+import { canViewRequisition } from "@/lib/requisitionVisibility";
 
 // IMPORTANT:
 // Requisition contains ref: "User".
@@ -141,7 +143,27 @@ export async function GET(request, { params }) {
 
     /*
      * --------------------------------------------------
-     * 7. GENERATE PDF
+     * 7. AUTHORIZE ACCESS TO THIS REQUISITION
+     * --------------------------------------------------
+     * Authentication alone is not sufficient for downloading a document.
+     * Mirror the single-requisition endpoint's visibility and prior-decision
+     * rules so PDFs cannot be used to bypass the application's access scope.
+     */
+    const hasMyDecision = await Approval.exists({
+      requisition: requisition._id,
+      approver: auth.sub,
+    });
+
+    if (!canViewRequisition(auth, requisition) && !hasMyDecision) {
+      return NextResponse.json(
+        { success: false, message: "You are not authorized to download this requisition document." },
+        { status: 403 }
+      );
+    }
+
+    /*
+     * --------------------------------------------------
+     * 8. GENERATE PDF
      * --------------------------------------------------
      */
     const type = new URL(request.url).searchParams.get("type");
@@ -216,6 +238,9 @@ export async function GET(request, { params }) {
 
         headers: {
           "Content-Type": "application/pdf",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "DENY",
+          "Referrer-Policy": "no-referrer",
 
           "Content-Disposition":
             `attachment; filename="${downloadName}"`,
