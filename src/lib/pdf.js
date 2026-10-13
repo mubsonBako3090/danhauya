@@ -218,6 +218,16 @@ export function generateRequisitionPDF(
         )}`
       );
 
+      if (requisition.isConsolidated) {
+        doc.text("Record Type: Consolidated Requisition");
+        if (requisition.consolidatedAt) {
+          doc.text(`Consolidated: ${formatDate(requisition.consolidatedAt)}`);
+        }
+        if (requisition.consolidatedBy?.fullName) {
+          doc.text(`Consolidated By: ${safeText(requisition.consolidatedBy.fullName)}`);
+        }
+      }
+
       doc.text(
         `Urgency: ${safeText(
           requisition.urgency
@@ -287,152 +297,74 @@ export function generateRequisitionPDF(
           .font("Helvetica")
           .text("No items have been added.");
       } else {
-        /*
-         * Table header
-         */
-        const tableTop = doc.y;
+        const contentBottom = () => doc.page.height - doc.page.margins.bottom - 75;
+        const drawTableHeader = () => {
+          const headerY = doc.y;
+          doc.fontSize(9).font("Helvetica-Bold");
+          doc.text("No.", 50, headerY, { width: 30 });
+          doc.text("Item", 85, headerY, { width: 210 });
+          doc.text("Qty", 300, headerY, { width: 45, align: "right" });
+          doc.text("Unit Cost", 350, headerY, { width: 85, align: "right" });
+          doc.text("Total", 440, headerY, { width: 105, align: "right" });
+          doc.moveDown(0.6);
+          doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+          doc.moveDown(0.5);
+          doc.font("Helvetica");
+        };
 
-        doc
-          .fontSize(9)
-          .font("Helvetica-Bold");
+        drawTableHeader();
+        let calculatedTotal = 0;
 
-        doc.text("No.", 50, tableTop, {
-          width: 30,
-        });
-
-        doc.text("Item", 85, tableTop, {
-          width: 210,
-        });
-
-        doc.text("Qty", 300, tableTop, {
-          width: 45,
-          align: "right",
-        });
-
-        doc.text("Unit Cost", 350, tableTop, {
-          width: 85,
-          align: "right",
-        });
-
-        doc.text("Total", 440, tableTop, {
-          width: 105,
-          align: "right",
-        });
-
-        doc.moveDown(0.6);
-
-        doc
-          .moveTo(50, doc.y)
-          .lineTo(545, doc.y)
-          .stroke();
-
-        doc.moveDown(0.5);
-
-        /*
-         * Table rows
-         */
         items.forEach((item, index) => {
-          /*
-           * Keep PDF generation safe even if one item
-           * contains an unexpected value.
-           */
           const itemName = safeText(item?.name);
           const quantity = Number(item?.quantity) || 0;
-          const unitCost = Number(item?.unitCost) || 0;
-          const totalCost =
-            Number(item?.totalCost) ||
-            quantity * unitCost;
+          const unitCost = Number(
+            documentType === "procurement"
+              ? (item?.procurementUnitCost ?? item?.unitCost)
+              : item?.unitCost
+          ) || 0;
+          const explicitTotal = Number(
+            documentType === "procurement"
+              ? item?.procurementTotalCost
+              : item?.totalCost
+          );
+          const totalCost = Number.isFinite(explicitTotal) && explicitTotal > 0
+            ? explicitTotal
+            : quantity * unitCost;
+          calculatedTotal += totalCost;
+
+          const nameHeight = doc.heightOfString(itemName, { width: 205, font: "Helvetica", fontSize: 9 });
+          const rowHeight = Math.max(16, nameHeight + 6);
+          if (doc.y + rowHeight > contentBottom()) {
+            doc.addPage();
+            drawTableHeader();
+          }
 
           const rowY = doc.y;
-
-          doc
-            .fontSize(9)
-            .font("Helvetica");
-
-          doc.text(
-            String(index + 1),
-            50,
-            rowY,
-            {
-              width: 30,
-            }
-          );
-
-          doc.text(
-            itemName,
-            85,
-            rowY,
-            {
-              width: 210,
-            }
-          );
-
-          doc.text(
-            String(quantity),
-            300,
-            rowY,
-            {
-              width: 45,
-              align: "right",
-            }
-          );
-
-          doc.text(
-            formatCurrency(unitCost),
-            350,
-            rowY,
-            {
-              width: 85,
-              align: "right",
-            }
-          );
-
-          doc.text(
-            formatCurrency(totalCost),
-            440,
-            rowY,
-            {
-              width: 105,
-              align: "right",
-            }
-          );
-
-          /*
-           * Move below the longest text in the row.
-           */
-          doc.moveDown(1);
-
-          /*
-           * Prevent rows from becoming too close together.
-           */
-          if (doc.y < rowY + 16) {
-            doc.y = rowY + 16;
-          }
+          doc.fontSize(9).font("Helvetica");
+          doc.text(String(index + 1), 50, rowY, { width: 30 });
+          doc.text(itemName, 85, rowY, { width: 205 });
+          doc.text(String(quantity), 300, rowY, { width: 45, align: "right" });
+          doc.text(formatCurrency(unitCost), 350, rowY, { width: 85, align: "right" });
+          doc.text(formatCurrency(totalCost), 440, rowY, { width: 105, align: "right" });
+          doc.y = rowY + rowHeight;
         });
 
         doc.moveDown(0.5);
-
-        doc
-          .moveTo(50, doc.y)
-          .lineTo(545, doc.y)
-          .stroke();
-
+        if (doc.y + 30 > contentBottom()) doc.addPage();
+        doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
         doc.moveDown(0.6);
 
-        /*
-         * Estimated total
-         */
-        doc
-          .fontSize(11)
-          .font("Helvetica-Bold")
-          .text(
-            `Estimated Total: ${formatCurrency(
-              requisition.estimatedCost
-            )}`,
-            {
-              align: "right",
-            }
-          );
+        const estimatedCost = Number(requisition.estimatedCost);
+        const displayTotal = documentType === "procurement"
+          ? calculatedTotal
+          : Number.isFinite(estimatedCost) && estimatedCost > 0
+            ? estimatedCost
+            : calculatedTotal;
+        doc.fontSize(11).font("Helvetica-Bold").text(
+          `Estimated Total: ${formatCurrency(displayTotal)}`,
+          { align: "right" }
+        );
       }
 
       doc.moveDown(1);

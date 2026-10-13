@@ -54,28 +54,35 @@ export function generateBOQPDF(requisition, requesterUser) {
         ["Requested Unit", 78],
         ["Market Unit", 78],
         ["Market Total", 88],
-        ["Reason / Note", 110],
+        ["Reason / Note", 105],
       ];
       const xs = [];
       let cursor = 32;
       for (const [, width] of cols) { xs.push(cursor); cursor += width; }
 
-      doc.fontSize(7.5).font("Helvetica-Bold");
-      cols.forEach(([label, width], i) => {
-        doc.text(label, xs[i], doc.y, { width, align: i >= 3 && i <= 6 ? "right" : "left" });
-      });
-      doc.moveDown(.8);
-      doc.font("Helvetica");
+      const contentBottom = () => doc.page.height - doc.page.margins.bottom - 30;
+      const drawHeader = () => {
+        const headerY = doc.y;
+        doc.fontSize(7.5).font("Helvetica-Bold");
+        cols.forEach(([label, width], i) => {
+          doc.text(label, xs[i], headerY, { width, align: i >= 3 && i <= 6 ? "right" : "left" });
+        });
+        doc.moveDown(.8);
+        doc.moveTo(32, doc.y).lineTo(809, doc.y).stroke();
+        doc.moveDown(.35);
+        doc.font("Helvetica");
+      };
 
+      drawHeader();
       let grand = 0;
-      (requisition.items || []).forEach((item, index) => {
+      const items = Array.isArray(requisition.items) ? requisition.items : [];
+      items.forEach((item, index) => {
         const requested = Number(item.requestedUnitCost ?? item.unitCost ?? 0);
         const market = Number(item.procurementUnitCost ?? item.unitCost ?? 0);
         const qty = Number(item.quantity || 0);
         const total = qty * market;
         grand += total;
 
-        const y = doc.y;
         const values = [
           String(index + 1),
           unitLabel(item),
@@ -87,26 +94,30 @@ export function generateBOQPDF(requisition, requesterUser) {
           String(item.procurementNote || "-"),
         ];
 
+        const rowHeight = Math.max(
+          14,
+          doc.heightOfString(values[1], { width: cols[1][1] - 4, font: "Helvetica", fontSize: 7.5 }),
+          doc.heightOfString(values[2], { width: cols[2][1] - 4, font: "Helvetica", fontSize: 7.5 }),
+          doc.heightOfString(values[7], { width: cols[7][1] - 4, font: "Helvetica", fontSize: 7.5 })
+        ) + 5;
+
+        if (doc.y + rowHeight > contentBottom()) {
+          doc.addPage();
+          drawHeader();
+        }
+
+        const y = doc.y;
         values.forEach((value, i) => {
-          doc.text(value, xs[i], y, {
+          doc.fontSize(7.5).font("Helvetica").text(value, xs[i], y, {
             width: cols[i][1] - 4,
             align: i >= 3 && i <= 6 ? "right" : "left",
           });
         });
-
-        const maxLines = Math.max(
-          doc.heightOfString(values[1], { width: cols[1][1] - 4 }),
-          doc.heightOfString(values[2], { width: cols[2][1] - 4 }),
-          doc.heightOfString(values[7], { width: cols[7][1] - 4 })
-        );
-        doc.y = y + Math.max(14, maxLines + 5);
-
-        if (doc.y > 520 && index < (requisition.items || []).length - 1) {
-          doc.addPage();
-        }
+        doc.y = y + rowHeight;
       });
 
       doc.moveDown();
+      if (doc.y + 30 > contentBottom()) doc.addPage();
       doc.font("Helvetica-Bold").text(`GRAND TOTAL: ${money(grand)}`, { align: "right" });
 
       if (requisition.procurementNotes) {
@@ -121,6 +132,18 @@ export function generateBOQPDF(requisition, requesterUser) {
         doc.font("Helvetica").text(
           requisition.sourceRequisitions.map((id) => id?.requisitionNumber || String(id)).join(", ")
         );
+      }
+
+      const range = doc.bufferedPageRange();
+      for (let pageIndex = range.start; pageIndex < range.start + range.count; pageIndex++) {
+        doc.switchToPage(pageIndex);
+        doc.fontSize(7).font("Helvetica").fillColor("gray").text(
+          `Kaduna State University - Bill of Quantities | Page ${pageIndex + 1} of ${range.count}`,
+          32,
+          doc.page.height - 22,
+          { width: doc.page.width - 64, align: "center" }
+        );
+        doc.fillColor("black");
       }
 
       doc.end();
