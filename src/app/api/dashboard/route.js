@@ -390,8 +390,7 @@ export async function GET() {
     }
 
     if (auth.role === ROLES.ADMIN) {
-      const auditSince = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const [totalUsers, pendingUsers, activeUsers, deactivatedUsers, totalRequisitions, activeRequisitions, draftRequisitions, pendingRequisitions, returnedRequisitions, approvedRequisitions, rejectedRequisitions, auditEvents24h, approvalEvents24h, userEvents24h, requisitionEvents24h] = await Promise.all([
+      const [totalUsers, pendingUsers, activeUsers, deactivatedUsers, totalRequisitions, activeRequisitions, draftRequisitions, pendingRequisitions, returnedRequisitions, approvedRequisitions, rejectedRequisitions, auditEventsAllTime, approvalEventsAllTime, userEventsAllTime, requisitionEventsAllTime] = await Promise.all([
         User.countDocuments(),
         User.countDocuments({ accountStatus: "pending" }),
         User.countDocuments({ accountStatus: "active" }),
@@ -403,12 +402,12 @@ export async function GET() {
         Requisition.countDocuments({ status: REQUISITION_STATUS.RETURNED }),
         Requisition.countDocuments({ status: REQUISITION_STATUS.APPROVED }),
         Requisition.countDocuments({ status: REQUISITION_STATUS.REJECTED }),
-        AuditLog.countDocuments({ createdAt: { $gte: auditSince } }),
-        AuditLog.countDocuments({ createdAt: { $gte: auditSince }, action: { $in: ["requisition.approve", "requisition.return", "requisition.reject"] } }),
-        AuditLog.countDocuments({ createdAt: { $gte: auditSince }, action: { $regex: /^user\./ } }),
-        AuditLog.countDocuments({ createdAt: { $gte: auditSince }, action: { $regex: /^requisition\./ } }),
+        AuditLog.countDocuments({}),
+        AuditLog.countDocuments({ action: { $in: ["requisition.approve", "requisition.return", "requisition.reject"] } }),
+        AuditLog.countDocuments({ action: { $regex: /^user\./ } }),
+        AuditLog.countDocuments({ action: { $regex: /^requisition\./ } }),
       ]);
-      return NextResponse.json({ role: auth.role, totalUsers, pendingUsers, activeUsers, deactivatedUsers, totalRequisitions, activeRequisitions, draftRequisitions, pendingRequisitions, returnedRequisitions, approvedRequisitions, rejectedRequisitions, auditEvents24h, approvalEvents24h, userEvents24h, requisitionEvents24h });
+      return NextResponse.json({ role: auth.role, totalUsers, pendingUsers, activeUsers, deactivatedUsers, totalRequisitions, activeRequisitions, draftRequisitions, pendingRequisitions, returnedRequisitions, approvedRequisitions, rejectedRequisitions, auditEventsAllTime, approvalEventsAllTime, userEventsAllTime, requisitionEventsAllTime });
     }
 
     return NextResponse.json({ message: "No dashboard statistics are configured for this role." }, { status: 403 });
