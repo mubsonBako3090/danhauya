@@ -72,3 +72,30 @@
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 0.75rem 0;
+}
+
+.pageButton {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: 0.5rem 0.85rem;
+  cursor: pointer;
+}
+
+.pageButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.pageInfo {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}

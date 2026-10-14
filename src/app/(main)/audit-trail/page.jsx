@@ -32,6 +32,8 @@ export default function AuditTrailPage() {
   const [filters, setFilters] = useState({ action: "", entityType: "" });
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({ page: 1, limit: 50, total: 0, totalPages: 1 });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -39,30 +41,38 @@ export default function AuditTrailPage() {
       const params = {};
       if (filters.action) params.action = filters.action;
       if (filters.entityType) params.entityType = filters.entityType;
+      params.page = page;
+      params.limit = 50;
       const { data } = await axios.get("/api/audit-trail", { params });
-      setLogs(data.logs);
+      setLogs(data.logs || []);
+      setPagination(data.pagination || { page, limit: 50, total: (data.logs || []).length, totalPages: 1 });
     } catch (err) {
       toast.error(err.response?.data?.message || "Failed to load audit trail.");
     } finally {
       setLoading(false);
     }
-  }, [filters]);
+  }, [filters, page]);
 
   useEffect(() => {
     load();
   }, [load]);
 
+  const updateFilter = (key, value) => {
+    setPage(1);
+    setFilters((current) => ({ ...current, [key]: value }));
+  };
+
   return (
     <div className={styles.wrapper}>
       <h1 className={styles.heading}>Audit Trail</h1>
-      <p className={styles.subheading}>Detailed system activity for administrators. Use the filters below to investigate users, requisitions, approvals, and other recorded actions.</p>
+      <p className={styles.subheading}>All-time system activity for administrators. Records are shown newest first; use the filters and page controls to investigate older user, requisition, and approval events.</p>
 
       <div className={styles.filters}>
         <SelectField
           id="action"
           label="Action"
           value={filters.action}
-          onChange={(e) => setFilters({ ...filters, action: e.target.value })}
+          onChange={(e) => updateFilter("action", e.target.value)}
         >
           <option value="">All actions</option>
           {ACTION_OPTIONS.map((a) => (
@@ -75,7 +85,7 @@ export default function AuditTrailPage() {
           id="entityType"
           label="Entity"
           value={filters.entityType}
-          onChange={(e) => setFilters({ ...filters, entityType: e.target.value })}
+          onChange={(e) => updateFilter("entityType", e.target.value)}
         >
           <option value="">All entities</option>
           {ENTITY_OPTIONS.map((e) => (
@@ -85,6 +95,10 @@ export default function AuditTrailPage() {
           ))}
         </SelectField>
       </div>
+
+      <p className={styles.hint}>
+        {pagination.total.toLocaleString()} matching audit record{pagination.total === 1 ? "" : "s"} across all available time.
+      </p>
 
       {loading ? (
         <p className={styles.hint}>Loading…</p>
@@ -114,6 +128,30 @@ export default function AuditTrailPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {!loading && pagination.total > 0 && (
+        <div className={styles.pagination}>
+          <button
+            type="button"
+            className={styles.pageButton}
+            onClick={() => setPage((current) => Math.max(1, current - 1))}
+            disabled={page <= 1}
+          >
+            Previous
+          </button>
+          <span className={styles.pageInfo}>
+            Page {pagination.page} of {pagination.totalPages}
+          </span>
+          <button
+            type="button"
+            className={styles.pageButton}
+            onClick={() => setPage((current) => Math.min(pagination.totalPages, current + 1))}
+            disabled={page >= pagination.totalPages}
+          >
+            Next
+          </button>
         </div>
       )}
     </div>
