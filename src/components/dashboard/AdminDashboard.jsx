@@ -19,10 +19,10 @@ export default function AdminDashboard({ user }) {
     ["Pending Account Approvals", stats?.pendingUsers, "bi-person-check", "pending", "/users"],
     ["Active Requisitions", stats?.activeRequisitions, "bi-hourglass-split", "approved", "/requisitions"],
     ["Rejected Requisitions", stats?.rejectedRequisitions, "bi-x-circle", "rejected", "/requisitions?status=rejected"],
-    ["Audit Events · 24h", stats?.auditEvents24h, "bi-activity", "primary", "/audit-trail"],
-    ["Approval Decisions · 24h", stats?.approvalEvents24h, "bi-check2-square", "approved", "/audit-trail"],
-    ["User Activity · 24h", stats?.userEvents24h, "bi-person-lines-fill", "pending", "/audit-trail"],
-    ["Requisition Activity · 24h", stats?.requisitionEvents24h, "bi-file-earmark-text", "draft", "/audit-trail"],
+    ["Audit Events · All Time", stats?.auditEventsAllTime, "bi-activity", "primary", "/audit-trail"],
+    ["Approval Decisions · All Time", stats?.approvalEventsAllTime, "bi-check2-square", "approved", "/audit-trail"],
+    ["User Activity · All Time", stats?.userEventsAllTime, "bi-person-lines-fill", "pending", "/audit-trail"],
+    ["Requisition Activity · All Time", stats?.requisitionEventsAllTime, "bi-file-earmark-text", "draft", "/audit-trail"],
   ];
 
   return (
